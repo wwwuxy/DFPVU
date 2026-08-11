@@ -1,0 +1,76 @@
+mainmenu "Test File Config"
+
+menu "RESNET_TEST"
+    choice
+        prompt "Posit<32, 2>"
+        default RESNET_ADD_P32
+        depends on !SAMPLE_TEST  # 新增依赖：仅在SAMPLE_TEST未启用时可见
+        help
+            Select one of the ResNet operations for the test.
+
+    config RESNET_ADD_P32
+        bool "resnet_add_p32_test"
+        default n
+        help
+            Enable ResNet addition test.
+
+    config RESNET_SUB_P32
+        bool "resnet_sub_p32_test"
+        default n
+        help
+            Enable ResNet subtraction test.
+
+    config RESNET_MUL_P32
+        bool "resnet_mul_p32_test"
+        default n
+        help
+            Enable ResNet multiplication test.
+
+    config RESNET_DIV_P32
+        bool "resnet_div_p32_test"
+        default n
+        help
+            Enable ResNet division test.
+
+    config RESNET_DOT_P32
+        bool "resnet_dot_p32_test"
+        default n
+        help
+            Enable ResNet dot product test. 
+
+    config RESNET_FP32_TO_POSIT32
+        bool "resnet_fp32_to_posit32_test"
+        default n
+        help
+            Enable IEEE-754 FP32 to Posit32 conversion test.
+            
+    config RESNET_POSIT32_TO_FP32
+        bool "resnet_posit32_to_fp32_test"
+        default n
+        help
+            Enable Posit32 to IEEE-754 FP32 conversion test.
+            
+    config RESNET_GREATER_P32
+        bool "resnet_greater_p32_test"
+        default n
+        help
+            Enable Posit32 greater comparison test.
+
+    config RESNET_LESS_P32
+        bool "resnet_less_p32_test"
+        default n
+        help
+            Enable Posit32 less comparison test.
+
+    config RESNET_TRUNCATE_P32
+        bool "resnet_truncate_p32_test"
+        default n
+        help
+            Enable Posit32 to Int32 truncation test.
+
+    endchoice
+endmenu
+
+config SAMPLE_TEST
+    bool "manually_sample_test"
+    default n

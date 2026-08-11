@@ -1,0 +1,38 @@
+# Scala / sbt / Mill build output
+/target/
+/project/target/
+/out/
+/.mill-ammonite/
+/.scala-build/
+
+# Generated RTL and Verilator build products
+/vsrc/PvuTop.sv
+/obj_dir/
+/config.h
+*.vcd
+*.fst
+*.vpd
+
+# Test output and local logs
+/test_run_dir/
+/tmp_log.txt
+*.log
+
+# BSP and IDE state
+/.bloop/
+/.bsp/
+/.metals/
+/.idea/
+/.vscode/
+*.iml
+
+# Local configuration backups
+/.config.old
+
+# Python cache and editor/OS files
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
