@@ -1,65 +1,137 @@
 # DFPVU
-## 1. 整体架构
-DFPVU项目是一个使用Chisel（基于Scala的硬件描述语言）开发的向量处理单元，主要支持浮点数和Posit数格式的各种运算操作。项目的整体架构如下：
-### 核心模块结构
-PvuTop: 系统顶层模块，整合了所有功能单元
-### 运算单元:
-基本算术运算: Add, Sub, Mul, Div
-- 向量运算: DotProduct
-- 格式转换: PositConvert, FloatToPosit, PositToFloat
-### 数据处理流程
-输入处理:
-- 输入数据可以是Posit格式或Float格式（由Isposit信号控制）
-- 支持向量化处理（VECTOR_SIZE可配置）
-解码阶段:
-- PositDecode/FloatDecode: 将输入数据解码为内部表示形式（符号位、指数、尾数）
-计算阶段:
-- 根据op信号选择不同的运算单元
-- 执行相应的浮点运算或Posit运算
-编码阶段:
-- PositEncode/FloatEncode: 将计算结果编码回输出格式
-- 输出格式由Outposit信号控制
-## 2. 关键组件
-### 浮点数处理模块
-- FloatDecode.scala: 负责将浮点数解码为内部表示
-- FloatEncode.scala: 负责将内部表示编码为浮点数格式
-- FracNorm.scala: 负责尾数的规格化处理
-- FractionAlignment_AddSub.scala: 处理加减法中的尾数对齐
-### Posit数处理模块
-- PositDecode.scala: 负责将Posit数解码为内部表示
-- PositEncode.scala: 负责将内部表示编码为Posit数格式
-- PositConvert.scala: 负责不同精度Posit数之间的转换
-### 运算单元
-- Add.scala/Sub.scala: 实现加减法运算
-- Mul.scala: 实现乘法运算
-- Div.scala: 实现除法运算
-- DotProduct.scala: 实现向量点积运算
-- FloatToPosit.scala/PositToFloat.scala: 实现Float和Posit之间的格式转换
-### 辅助模块
-- BarrelShift.scala: 桶形移位器，用于快速移位操作
-- Lzc.scala: 前导零计数器，用于规格化过程
-- CsaTree.scala/CompTree.scala: 压缩树，用于高效进行多操作数加法
-- Compressor3to2.scala/Compressor4to2.scala: 3-2和4-2压缩器，用于加速乘法运算
-- BoothEncoder.scala/Radix4_Booth_Multiplier.scala: 用Booth算法实现的乘法器
-## 3. 构建与测试系统
-### 构建系统
-- 使用Mill作为构建工具
-- build.sc定义了项目的依赖与构建配置
-- 支持BSP（Build Server Protocol）便于IDE集成
-### 测试框架
-- 使用ScalaTest进行单元测试
-- C++测试程序（csrc目录）用于功能验证
-- 测试向量和参考结果存储在test_src目录中
-- 提供多种测试场景（add, sub, mul, div, dot_product等）
-## 4. 配置与参数化设计
-- DFPVU采用高度参数化设计，主要配置参数包括：
-- POSIT_WIDTH: Posit数的位宽
-- VECTOR_SIZE: 向量大小
-- ES: Posit数的指数位域大小
-- DST_POSIT_WIDTH/DST_ES: 目标Posit格式参数（用于格式转换）
-- FLOAT_MODE: 浮点数格式选择（FP4/FP8/FP16/FP32/FP64）
-## 5. 仿真与验证
-- 使用Verilator进行RTL仿真
-- 生成波形文件（waveform.vcd）用于调试分析
-- 提供各种测试向量和预期结果用于验证
-- 这种架构设计使DFPVU成为一个高度可配置、灵活的向量处理单元，特别适合需要处理多种精度浮点数和Posit数的应用场景，如机器学习加速、科学计算等领域。项目通过模块化设计实现了各种运算单元的复用和组合，同时支持不同数据格式之间的高效转换。
+
+DFPVU（Dynamic Floating-point / Posit Vector Processing Unit）是一个用
+[Chisel](https://www.chisel-lang.org/) 编写的可参数化向量处理单元。它以
+Posit 为主要内部数值表示，同时支持 IEEE-754 浮点输入、输出及与 Posit
+之间的转换。默认配置生成一个 `Posit<32,2>`、4 元素向量的 `PvuTop`，适合
+用于探索混合精度计算、神经网络推理和科学计算中的数值运算单元。
+
+## 功能
+
+- 逐元素 Posit 加、减、乘、除。
+- 向量点积（向量输入、标量输出）。
+- Posit 精度转换，以及 Posit 与 FP4/FP8/FP16/FP32/FP64 的相互转换。
+- Posit 比较：输出每对元素中的较大值或较小值。
+- Posit 截断为有符号整数。
+- 运行时选择源/目标 Posit 位宽与有效向量长度；顶层将最大 Posit 位宽限制为
+  64 位、最大有效向量长度限制为 16。
+
+## 技术栈
+
+| 用途 | 技术 |
+| --- | --- |
+| 硬件描述 | Scala 2.13.12、Chisel 6（Mill 配置为 6.5.0；sbt 配置为 6.2.0） |
+| 生成 RTL | Chisel/CIRCT，输出 SystemVerilog |
+| RTL 仿真 | Verilator、C++ |
+| 构建入口 | `make` + sbt；另提供 Mill 0.11.7 构建定义 |
+| 参考模型/测试数据 | SoftPosit、`test_src/` 二进制向量 |
+
+## 架构
+
+`PvuTop` 接收两路 Posit 向量或两路浮点向量，并由 `op` 选择运算。输入先由
+`PositDecode` 或 `FloatDecode` 转换为内部表示（符号、指数、尾数）；随后进入
+算术、点积、转换或比较单元；最后由 `PositEncode` 或 `FloatEncode` 编码为所选
+输出格式。
+
+| 层次 | 主要模块 |
+| --- | --- |
+| 顶层与接口 | `PvuTop.scala`、`Elaborate.scala` |
+| 格式处理 | `PositDecode/Encode`、`FloatDecode/Encode`、`FloatToPosit`、`PositToFloat`、`PositConvert`、`PositToInt` |
+| 运算 | `Add`、`Sub`、`Mul`、`Div`、`DotProduct`、`PositGreater`、`PositLess` |
+| 算术基础单元 | Booth 乘法器、压缩树、桶形移位器、前导零计数器、整数除法/倒数单元 |
+
+### 顶层默认参数
+
+`Elaborate.scala` 当前生成：`MAX_POSIT_WIDTH=32`、`MAX_VECTOR_SIZE=4`、
+`MAX_ALIGN_WIDTH=30`、`ES=2`、`FLOAT_MODE=3`（FP32）。修改这些参数后重新生成
+RTL 即可得到其他静态配置。
+
+### 操作码
+
+| `op` | 操作 |
+| ---: | --- |
+| 1–5 | Add、Sub、Mul、Div、DotProduct |
+| 6 | Posit 精度转换 |
+| 7 | Float ↔ Posit 转换（由 `float_posit` 决定方向） |
+| 8–10 | Greater、Less、Posit 转 Int |
+
+浮点格式由 `float_mode` 选择：0=FP4、1=FP8、2=FP16、3=FP32、4=FP64。
+
+## 快速开始
+
+### 前置条件
+
+- JDK、sbt 和可用的网络/本地 Maven 缓存，以解析 Chisel 依赖。
+- GNU Make、C++ 编译器和 Verilator。
+- 可选：`menuconfig`（选择 C++ 仿真用例）和 GTKWave（查看 VCD 波形）。
+- C++ 回归测试包含 `../SoftPosit/source/include/softposit.h`；请将 SoftPosit
+  放在 DFPVU 仓库的同级目录，或按你的目录布局修改 `csrc/` 中的 include 路径。
+
+从仓库根目录生成 RTL：
+
+```bash
+make verilog
+```
+
+这会运行 `pvu.Elaborate`，并将生成的顶层 RTL 写入 `vsrc/PvuTop.sv`。随后选择
+一个仿真用例并运行：
+
+```bash
+make menuconfig
+make config.h
+make run
+```
+
+`make run` 使用 Verilator 编译 `vsrc/` 和 `csrc/`，然后执行
+`obj_dir/VPvuTop`。当前提交的 `.config` 选择的是 Posit32 除法回归；用
+`menuconfig` 可选择加、减、乘、除、点积、比较、格式转换或截断测试。也可以一次
+完成生成与仿真：
+
+```bash
+make debug
+```
+
+若测试程序生成 `pvu_top_wave.vcd`，可打开波形：
+
+```bash
+make wave
+```
+
+## 测试
+
+- `csrc/`：Verilator C++ 驱动程序。通过 `config.h` 中的 `CONFIG_*` 宏选择一个
+  `main`；`Kconfig` 定义了可选用例。
+- `test_src/`：Posit32/FP32 的输入数据和预期结果（二进制文件）。
+- `src/test/scala/pvu/PvuTopTest.scala`：Posit 转换与比较的 ChiselTest 用例。
+
+注意：测试源码依赖 `chiseltest`，但当前 `build.sbt` 与 `build.sc` 没有声明该依赖。
+因此，仓库现有、已接入 Makefile 的验证入口是上面的 Verilator 流程；在补充兼容的
+`chiseltest` 依赖前，不应把 Scala 测试命令视为开箱即用。
+
+## 项目结构
+
+```text
+src/main/scala/pvu/   Chisel 顶层、数值格式和运算模块
+src/test/scala/pvu/   ChiselTest 测试源码
+src/main/resources/   Verilog 资源
+vsrc/                 生成的 SystemVerilog 顶层
+csrc/                 Verilator C++ 测试驱动
+test_src/             二进制测试向量与 golden results
+Kconfig, .config      仿真用例选择
+makefile              RTL 生成、仿真与波形查看命令
+build.sbt, build.sc   sbt 与 Mill 构建配置
+```
+
+## 开发说明
+
+- 生成 RTL 前先在 `Elaborate.scala` 中确认需要的静态参数；C++ 测试驱动目前按默认
+  4 路、32 位接口编写。
+- 修改 C++ 用例选择后执行 `make config.h`，再运行 `make run`。
+- 生成的 Verilator 产物位于 `obj_dir/`；生成 RTL 位于 `vsrc/`。提交前请确认是否
+  有意纳入这些生成文件。
+- 目前仓库未提供贡献指南、分支策略、代码格式配置或许可证文件。提交贡献前请先与
+  维护者确认相应要求。
+
+## 许可证
+
+本仓库当前未包含许可证声明。使用、复制或分发前请联系项目维护者确认授权条款。

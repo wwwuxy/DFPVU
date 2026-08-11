@@ -1,2 +1,0 @@
-[debug] Created transactional ClassFileManager with tempDir = /home/wuxy/BPVU/target/scala-2.13/test-classes.bak
-[debug] Removing the temporary directory used for backing up class files: /home/wuxy/BPVU/target/scala-2.13/test-classes.bak
