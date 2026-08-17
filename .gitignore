@@ -36,3 +36,6 @@ __pycache__/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Docs
+docs/

@@ -49,15 +49,7 @@ run:${CSRCS} ${VSRCS}
 
 wave:
 	gtkwave pvu_top_wave.vcd
-
-git:
-	rm waveform.vcd
-	git add .
-	git commit
-
-push:
-	git push
-
+	
 menuconfig:
 	menuconfig
 	make config.h

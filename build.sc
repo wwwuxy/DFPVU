@@ -2,7 +2,6 @@
 import mill._
 import mill.scalalib._
 import mill.scalalib.scalafmt.ScalafmtModule
-import mill.scalalib.TestModule.Utest
 // support BSP
 import mill.bsp._
 
@@ -31,12 +30,6 @@ object pvu extends ScalaModule with ScalafmtModule { m =>
   override def scalacPluginIvyDeps = Agg(
     ivy"org.chipsalliance:::chisel-plugin:$chiselVersion"
   )
-
-  object test extends ScalaTests with TestModule.ScalaTest {  // 测试模块
-    override def ivyDeps = m.ivyDeps() ++ Agg(
-      ivy"org.scalatest::scalatest::3.2.16"
-    )
-  }
 
   def repositoriesTask = T.task { // 仓库配置
     Seq(
