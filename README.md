@@ -102,17 +102,13 @@ make wave
 - `csrc/`：Verilator C++ 驱动程序。通过 `config.h` 中的 `CONFIG_*` 宏选择一个
   `main`；`Kconfig` 定义了可选用例。
 - `test_src/`：Posit32/FP32 的输入数据和预期结果（二进制文件）。
-- `src/test/scala/pvu/PvuTopTest.scala`：Posit 转换与比较的 ChiselTest 用例。
-
-注意：测试源码依赖 `chiseltest`，但当前 `build.sbt` 与 `build.sc` 没有声明该依赖。
-因此，仓库现有、已接入 Makefile 的验证入口是上面的 Verilator 流程；在补充兼容的
-`chiseltest` 依赖前，不应把 Scala 测试命令视为开箱即用。
+本项目只使用 Verilator 和 `csrc/` 中的 C++ 驱动进行功能回归，不维护或运行 Scala
+测试及 ChiselTest。sbt 和 Mill 仅用于编译、展开 Chisel 设计及生成 RTL。
 
 ## 项目结构
 
 ```text
 src/main/scala/pvu/   Chisel 顶层、数值格式和运算模块
-src/test/scala/pvu/   ChiselTest 测试源码
 src/main/resources/   Verilog 资源
 vsrc/                 生成的 SystemVerilog 顶层
 csrc/                 Verilator C++ 测试驱动
