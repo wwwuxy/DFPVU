@@ -3,9 +3,10 @@ export DESIGN_NICKNAME = dfpvu
 export PLATFORM = nangate45
 
 DFPVU_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
-export VERILOG_FILES = $(DFPVU_ROOT)/vsrc/PvuTop.sv \
-                       $(DFPVU_ROOT)/src/main/resources/pvu/lzc.sv
+export VERILOG_FILES = $(DFPVU_ROOT)/vsrc/PvuTop.sv
 export SDC_FILE = $(DFPVU_ROOT)/openroad/nangate45/constraint.sdc
+export ABC_CLOCK_PERIOD_IN_PS = $(PPA_CLOCK_PERIOD_NS)
+export SYNTH_HDL_FRONTEND = slang
 
 export CORE_UTILIZATION ?= 55
 export PLACE_DENSITY_LB_ADDON = 0.20

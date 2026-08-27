@@ -6,23 +6,38 @@ from pathlib import Path
 
 
 REQUIRED_FIELDS = {
-    "platform": "run__flow__platform",
-    "final area": "finish__design__instance__area",
-    "standard-cell count": "finish__design__instance__count__stdcell",
-    "setup WNS": "finish__timing__setup__ws",
-    "setup TNS": "finish__timing__setup__tns",
-    "total power": "finish__power__total",
-    "internal power": "finish__power__internal",
-    "switching power": "finish__power__switching",
-    "leakage power": "finish__power__leakage",
-    "detailed-route DRC count": "detailedroute__route__drc_errors",
-    "antenna-net count": "detailedroute__antenna__violating__nets",
+    "platform": ("run", "flow__platform", "run__flow__platform"),
+    "final area": ("finish", "design__instance__area", "finish__design__instance__area"),
+    "standard-cell count": ("finish", "design__instance__count__stdcell",
+                            "finish__design__instance__count__stdcell"),
+    "setup WNS": ("finish", "timing__setup__ws", "finish__timing__setup__ws"),
+    "setup TNS": ("finish", "timing__setup__tns", "finish__timing__setup__tns"),
+    "total power": ("finish", "power__total", "finish__power__total"),
+    "internal power": ("finish", "power__internal__total", "finish__power__internal"),
+    "switching power": ("finish", "power__switching__total", "finish__power__switching"),
+    "leakage power": ("finish", "power__leakage__total", "finish__power__leakage"),
+    "detailed-route DRC count": ("detailedroute", "route__drc_errors",
+                                 "detailedroute__route__drc_errors"),
+    "antenna-net count": ("detailedroute", "antenna__violating__nets",
+                          "detailedroute__antenna__violating__nets"),
 }
 
 
-def _missing(metrics):
-    return [name for name, key in REQUIRED_FIELDS.items()
-            if key not in metrics or metrics[key] in ("ERR", "N/A")]
+def _metric(metrics, path):
+    stage, key, legacy_key = path
+    stage_metrics = metrics.get(stage)
+    if isinstance(stage_metrics, dict) and key in stage_metrics:
+        return stage_metrics[key]
+    return metrics.get(legacy_key)
+
+
+def _required_values(metrics):
+    return {name: _metric(metrics, path) for name, path in REQUIRED_FIELDS.items()}
+
+
+def _missing(values):
+    return [name for name, value in values.items()
+            if value is None or value in ("ERR", "N/A")]
 
 
 def _markdown(summary):
@@ -78,26 +93,28 @@ def main(argv=None):
     except (OSError, ValueError) as exc:
         print("Unable to read metrics: {}".format(exc), file=sys.stderr)
         return 2
-    missing = _missing(metrics)
+    values = _required_values(metrics)
+    missing = _missing(values)
     if missing:
         print("Missing mandatory metrics: {}".format(", ".join(missing)), file=sys.stderr)
         return 2
     summary = {
         "status": "complete",
-        "run": {"platform": metrics["run__flow__platform"],
-                "openroad_commit": metrics.get("run__flow__openroad_commit", "unknown"),
+        "run": {"platform": values["platform"],
+                "openroad_commit": _metric(metrics, ("run", "flow__openroad_commit",
+                                             "run__flow__openroad_commit")) or "unknown",
                 "dfpvu_revision": args.dfpvu_revision,
                 "power_activity": "ORFS/OpenSTA default activity; not workload-derived"},
-        "area": {"instance_area_um2": metrics["finish__design__instance__area"],
-                 "stdcell_count": metrics["finish__design__instance__count__stdcell"]},
-        "timing": {"setup_wns_ns": metrics["finish__timing__setup__ws"],
-                   "setup_tns_ns": metrics["finish__timing__setup__tns"]},
-        "power": {"total": metrics["finish__power__total"],
-                  "internal": metrics["finish__power__internal"],
-                  "switching": metrics["finish__power__switching"],
-                  "leakage": metrics["finish__power__leakage"]},
-        "quality": {"drc_errors": metrics["detailedroute__route__drc_errors"],
-                    "antenna_violating_nets": metrics["detailedroute__antenna__violating__nets"]},
+        "area": {"instance_area_um2": values["final area"],
+                 "stdcell_count": values["standard-cell count"]},
+        "timing": {"setup_wns_ns": values["setup WNS"],
+                   "setup_tns_ns": values["setup TNS"]},
+        "power": {"total": values["total power"],
+                  "internal": values["internal power"],
+                  "switching": values["switching power"],
+                  "leakage": values["leakage power"]},
+        "quality": {"drc_errors": values["detailed-route DRC count"],
+                    "antenna_violating_nets": values["antenna-net count"]},
     }
     Path(args.output_json).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     Path(args.output_md).write_text(_markdown(summary), encoding="utf-8")
