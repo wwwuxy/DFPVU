@@ -16,9 +16,17 @@ require_file() {
   fi
 }
 
+require_executable() {
+  local path="$1"
+  if [[ ! -x "$path" ]]; then
+    printf 'Missing required executable: %s\n' "$path" >&2
+    exit 2
+  fi
+}
+
 require_file "$flow_home/flow/Makefile"
-require_file "$flow_home/tools/install/OpenROAD/bin/openroad"
-require_file "$flow_home/tools/install/yosys/bin/yosys"
+require_executable "$flow_home/tools/install/OpenROAD/bin/openroad"
+require_executable "$flow_home/tools/install/yosys/bin/yosys"
 
 mkdir -p "$result_root"
 
