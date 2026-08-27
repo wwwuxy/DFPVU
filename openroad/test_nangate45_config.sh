@@ -17,7 +17,7 @@ MAKEFILE
   CONFIG_MK="$repo_root/openroad/nangate45/config.mk" \
   -f - print-synthesis-config)"
 
-expected="$(printf '7.5\nslang\n%s' "$repo_root/vsrc/PvuTop.sv")"
+expected="$(printf '7500\nslang\n%s' "$repo_root/vsrc/PvuTop.sv")"
 if [[ "$actual" != "$expected" ]]; then
   printf 'Unexpected Nangate45 synthesis config:\n%s\n' "$actual" >&2
   exit 1
