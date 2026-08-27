@@ -7,6 +7,48 @@ from openroad.summarize_ppa import main
 
 
 class SummarizePpaTest(unittest.TestCase):
+    def test_extracts_current_nested_orfs_metrics(self):
+        metrics = {
+            "run": {
+                "flow__platform": "nangate45",
+                "flow__openroad_commit": "abc123",
+            },
+            "finish": {
+                "design__instance__area": 1234.5,
+                "design__instance__count__stdcell": 321,
+                "timing__setup__ws": -1.25,
+                "timing__setup__tns": -42.0,
+                "power__total": 0.0042,
+                "power__internal__total": 0.0020,
+                "power__switching__total": 0.0015,
+                "power__leakage__total": 0.0007,
+            },
+            "detailedroute": {
+                "route__drc_errors": 0,
+                "antenna__violating__nets": 0,
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metrics_path = root / "metrics.json"
+            output_json = root / "summary.json"
+            output_md = root / "summary.md"
+            metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+
+            result = main([
+                "--metrics", str(metrics_path),
+                "--output-json", str(output_json),
+                "--output-md", str(output_md),
+                "--dfpvu-revision", "deadbeef",
+            ])
+
+            self.assertEqual(result, 0)
+            summary = json.loads(output_json.read_text(encoding="utf-8"))
+            self.assertEqual(summary["run"]["platform"], "nangate45")
+            self.assertEqual(summary["timing"]["setup_wns_ns"], -1.25)
+            self.assertEqual(summary["power"]["internal"], 0.0020)
+            self.assertEqual(summary["quality"]["drc_errors"], 0)
+
     def test_extracts_complete_summary_and_marks_power_estimated(self):
         metrics = {
             "run__flow__platform": "nangate45",
