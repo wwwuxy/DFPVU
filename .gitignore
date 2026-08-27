@@ -18,6 +18,8 @@
 /tmp_log.txt
 *.log
 
+openroad/results/
+
 # BSP and IDE state
 /.bloop/
 /.bsp/
