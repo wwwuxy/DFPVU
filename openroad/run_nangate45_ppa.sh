@@ -74,6 +74,10 @@ PLATFORM_DIR="$flow_home/flow/platforms/nangate45" \
 
 "$python_exe" "$dfpvu_root/openroad/summarize_ppa.py" \
   --metrics "$result_root/metrics.json" \
+  --routing-log "$result_root/work/logs/nangate45/dfpvu/base/5_1_grt.log" \
   --output-json "$result_root/ppa-summary.json" \
   --output-md "$result_root/ppa-summary.md" \
-  --dfpvu-revision "$(git -C "$dfpvu_root" rev-parse HEAD)"
+  --dfpvu-revision "$(git -C "$dfpvu_root" rev-parse HEAD)" \
+  --orfs-revision "$(git -C "$flow_home" rev-parse HEAD)" \
+  --openroad-revision "$(git -C "$flow_home/tools/OpenROAD" rev-parse HEAD)" \
+  --target-period-ns "$period"

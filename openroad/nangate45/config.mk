@@ -5,7 +5,7 @@ export PLATFORM = nangate45
 DFPVU_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 export VERILOG_FILES = $(DFPVU_ROOT)/vsrc/PvuTop.sv
 export SDC_FILE = $(DFPVU_ROOT)/openroad/nangate45/constraint.sdc
-export ABC_CLOCK_PERIOD_IN_PS = $(PPA_CLOCK_PERIOD_NS)
+export ABC_CLOCK_PERIOD_IN_PS = $(shell awk 'BEGIN { printf "%.12g", $(PPA_CLOCK_PERIOD_NS) * 1000 }')
 export SYNTH_HDL_FRONTEND = slang
 
 export CORE_UTILIZATION ?= 55

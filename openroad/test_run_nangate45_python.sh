@@ -33,8 +33,10 @@ printf '%s\n' \
 printf '%s\n' \
   '#!/usr/bin/env python3' \
   'import json' \
+  'from pathlib import Path' \
   'import sys' \
   'output = sys.argv[sys.argv.index("--output") + 1]' \
+  'logs = Path(sys.argv[sys.argv.index("--logs") + 1])' \
   'metrics = {' \
   '  "run__flow__platform": "nangate45",' \
   '  "finish__design__instance__area": 1.0,' \
@@ -48,6 +50,8 @@ printf '%s\n' \
   '  "detailedroute__route__drc_errors": 0,' \
   '  "detailedroute__antenna__violating__nets": 0,' \
   '}' \
+  'logs.mkdir(parents=True, exist_ok=True)' \
+  '(logs / "5_1_grt.log").write_text("[INFO GRT-0096] Final congestion report:\nTotal 100 50 50.00% 0 / 0 / 0\n", encoding="utf-8")' \
   'with open(output, "w", encoding="utf-8") as stream:' \
   '    json.dump(metrics, stream)' \
   > "$flow_home/flow/util/genMetrics.py"
@@ -61,7 +65,11 @@ chmod +x "$python312"
 
 printf '%s\n' \
   '#!/usr/bin/env bash' \
-  'printf "%s\n" deadbeef' \
+  'case "$*" in' \
+  '  *openroad-flow/tools/OpenROAD*) printf "%s\\n" feedface ;;' \
+  '  *openroad-flow*) printf "%s\\n" cafebabe ;;' \
+  '  *) printf "%s\\n" deadbeef ;;' \
+  'esac' \
   > "$bin_dir/git"
 chmod +x "$bin_dir/git"
 
@@ -72,3 +80,16 @@ PPA_CLOCK_PERIOD_NS=7.5 \
 bash "$runner"
 
 test -f "$fake_repo/openroad/results/ppa-summary.json"
+python312_summary="$fake_repo/openroad/results/ppa-summary.json"
+/bin/python3 - "$python312_summary" <<'PY'
+import json
+import sys
+
+summary = json.load(open(sys.argv[1], encoding="utf-8"))
+assert summary["run"]["dfpvu_revision"] == "deadbeef"
+assert summary["run"]["openroad_revision"] == "feedface"
+assert summary["run"]["orfs_revision"] == "cafebabe"
+assert summary["run"]["target_period_ns"] == 7.5
+assert summary["power"]["units"] == "W"
+assert summary["quality"]["routing_overflow"] == 0
+PY
