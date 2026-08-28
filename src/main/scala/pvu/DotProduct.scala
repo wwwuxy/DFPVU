@@ -58,28 +58,29 @@ class DotProduct(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: In
   pir_exp_cmp                := frac_compare.io.pir_max_exp
   pir_frac_cmp               := frac_compare.io.pir_frac_align
 
-// Convert the mantissa of negative numbers to two's complement
-  val pir_frac_cmp_tmp = RegInit(VecInit(Seq.fill(VECTOR_SIZE)(0.U(MUL_WIDTH.W))))
-  pir_frac_cmp_tmp(0) := Mux(pir_sign_mul(0) === 1.U, ~pir_frac_cmp(0) + 1.U, pir_frac_cmp(0))  //初始化第一个元素，防止VECTOR_SIZE为1时出错
-  
+// Convert aligned negative mantissas to explicitly sized two's-complement operands.
+  val pir_frac_cmp_signed = Wire(Vec(VECTOR_SIZE, SInt(SUM_WIDTH.W)))
   for (i <- 0 until VECTOR_SIZE) {
-    pir_frac_cmp_tmp(i) := Mux(pir_sign_mul(i) === 1.U, ~pir_frac_cmp(i) + 1.U, pir_frac_cmp(i))
+    val alignedMagnitude = pir_frac_cmp(i).pad(SUM_WIDTH).asSInt
+    pir_frac_cmp_signed(i) := Mux(pir_sign_mul(i) === 1.U, -alignedMagnitude, alignedMagnitude)
   }
 
 // Accumulation through the CSA tree
-  val sum        = Wire(UInt(SUM_WIDTH.W))
-  val carry      = Wire(UInt(SUM_WIDTH.W))
-  val sum_result = Wire(UInt((SUM_WIDTH+1).W))
+  val sum          = Wire(UInt(SUM_WIDTH.W))
+  val carry        = Wire(UInt(SUM_WIDTH.W))
+  val reducedSum   = Wire(SInt(SUM_WIDTH.W))
+  val sumMagnitude = Wire(UInt(SUM_WIDTH.W))
 
   val csaTree = Module(new CsaTree(VECTOR_SIZE, SUM_WIDTH, SUM_WIDTH))
-  csaTree.io.operands_i := pir_frac_cmp
+  csaTree.io.operands_i := VecInit(pir_frac_cmp_signed.map(_.asUInt))
   sum                   := csaTree.io.sum_o
   carry                 := csaTree.io.carry_o
-  // Last sum
-  sum_result := carry + sum
+  // Convert the reduced two's-complement value back to sign and magnitude.
+  reducedSum   := (carry + sum).asSInt
+  sumMagnitude := Mux(reducedSum < 0.S, -reducedSum, reducedSum).asUInt
 
 // Output result
-  io.pir_sign_o := sum_result(SUM_WIDTH)
-  io.pir_exp_o  := pir_exp_cmp
-  io.pir_frac_o := sum_result
+  io.pir_sign_o := reducedSum < 0.S
+  io.pir_exp_o  := Mux(sumMagnitude === 0.U, 0.S, pir_exp_cmp)
+  io.pir_frac_o := sumMagnitude.pad(SUM_WIDTH + 1)
 }
