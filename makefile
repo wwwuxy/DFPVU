@@ -4,11 +4,38 @@ VSRCS += $(shell find $(abspath ./vsrc) -name "*.sv")
 CSRCS += $(shell find $(abspath ./csrc) -name "*.cpp")
 CONFIG_H = config.h
 
+# The exact-reference regression uses the checked-out SoftPosit source. Its
+# headers use C++ aggregate initializers, so compile the small p32-only subset
+# as C++ rather than relying on the upstream all-target (which also builds
+# unrelated formats). No SoftPosit source is copied into this repository.
+SOFTPOSIT_ROOT ?= /root/SoftPosit
+SOFTPOSIT_REF_DIR ?= build/softposit-ref
+SOFTPOSIT_REF_LIB := $(SOFTPOSIT_REF_DIR)/libsoftposit-ref.a
+SOFTPOSIT_REF_SRCS := \
+	$(SOFTPOSIT_ROOT)/source/s_addMagsP32.c \
+	$(SOFTPOSIT_ROOT)/source/s_subMagsP32.c \
+	$(SOFTPOSIT_ROOT)/source/s_mulAddP32.c \
+	$(SOFTPOSIT_ROOT)/source/p32_add.c \
+	$(SOFTPOSIT_ROOT)/source/p32_sub.c \
+	$(SOFTPOSIT_ROOT)/source/p32_mul.c \
+	$(SOFTPOSIT_ROOT)/source/p32_mulAdd.c \
+	$(SOFTPOSIT_ROOT)/source/p32_div.c \
+	$(SOFTPOSIT_ROOT)/source/p32_to_i32.c \
+	$(SOFTPOSIT_ROOT)/source/i32_to_p32.c \
+	$(SOFTPOSIT_ROOT)/source/c_convertDecToPosit32.c \
+	$(SOFTPOSIT_ROOT)/source/c_convertPosit32ToDec.c
+SOFTPOSIT_REF_CXXFLAGS := -std=c++17 -O2 -DSOFTPOSIT_FAST_INT64 -DINLINE_LEVEL=5 \
+	-I$(SOFTPOSIT_ROOT)/build/Linux-x86_64-GCC \
+	-I$(SOFTPOSIT_ROOT)/source/8086-SSE \
+	-I$(SOFTPOSIT_ROOT)/source/include
+
 # verilator flags
 VERILATOR_FLAGS += -Wall --cc --trace --exe --build --top-module $(TOPNAME)
 VERILATOR_FLAGS += -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDSIGNAL -Wno-UNOPTFLAT
 VERILATOR_FLAGS += --threads-dpi all
 VERILATOR_FLAGS += -j 16
+VERILATOR_FLAGS += -CFLAGS "$(SOFTPOSIT_REF_CXXFLAGS)"
+VERILATOR_FLAGS += -LDFLAGS "$(abspath $(SOFTPOSIT_REF_LIB))"
 
 include .config
 
@@ -43,7 +70,12 @@ verilog:
 		"runMain pvu.Elaborate"
 	python3 clean_line.py
 
-run:${CSRCS} ${VSRCS}
+$(SOFTPOSIT_REF_LIB): $(SOFTPOSIT_REF_SRCS)
+	@mkdir -p $(SOFTPOSIT_REF_DIR)
+	cd $(SOFTPOSIT_REF_DIR) && g++ $(SOFTPOSIT_REF_CXXFLAGS) -x c++ -c $(SOFTPOSIT_REF_SRCS)
+	ar crs $@ $(SOFTPOSIT_REF_DIR)/*.o
+
+run:${CSRCS} ${VSRCS} $(SOFTPOSIT_REF_LIB)
 	verilator ${VERILATOR_FLAGS} ${CSRCS} ${VSRCS}
 	./obj_dir/VPvuTop
 
