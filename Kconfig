@@ -68,6 +68,13 @@ menu "RESNET_TEST"
         help
             Enable Posit32 to Int32 truncation test.
 
+    config PVU_PROTOCOL_REGRESSION
+        bool "pvu_protocol_exact_reference_regression"
+        default n
+        help
+            Run the operation-complete, exact SoftPosit reference regression.
+            This is the baseline driver for the tagged ready/valid protocol.
+
     endchoice
 endmenu
 
