@@ -67,3 +67,18 @@
 ## Self-review
 
 Task 1 establishes a complete oracle; Task 2 fixes the known numerical defect; Tasks 3–4 implement protocol and timing architecture; Task 5 enforces the functional and physical acceptance gates. All interfaces, test commands and output conditions are explicit.
+
+## Execution amendment: operation-complete correctness phase
+
+The Task 1 oracle exposed pre-existing residuals in every non-dot operation family. Before the original Task 3, execute these bounded repair tasks and require the affected exact-reference bucket to reach zero mismatches:
+
+1. Raw Posit special-value propagation and raw max/min selection (NaR, zero, extrema) for ops 1–5, 8 and 9.
+2. Posit32-to-int SoftPosit-compatible RNE, saturation and NaR handling for op10.
+3. Runtime P32-to-P16 left-aligned RNE conversion for op6.
+4. Posit-to-FP finite, normal/subnormal and NaR packing for op7 modes 0–4.
+5. FP-to-Posit subnormal normalization, range/saturation and single-rounding for op7 modes 0–4.
+6. Shared add/sub alignment, canonical zero and GRS/RNE.
+7. Multiplication signed exponent/product normalization, followed by dot semantic closure against the sequential p32_mulAdd oracle.
+8. Division quotient, normalization and special-value rewrite.
+
+Do not advance to transactional pipelining or PPA until the full protocol regression reports zero mismatches. Each amendment task needs directed red/green vectors, fresh Verilog generation, exact-reference regression, commit, and review.
