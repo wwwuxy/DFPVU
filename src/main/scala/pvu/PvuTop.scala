@@ -242,6 +242,11 @@
      valid_range(i) := (i.U < valid_vector_size)
    }
    
+   val rawPositNaR = (BigInt(1) << (MAX_POSIT_WIDTH - 1)).U(MAX_POSIT_WIDTH.W)
+   val dotHasRawPositNaR = (0 until MAX_VECTOR_SIZE)
+     .map(i => valid_range(i) && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR))
+     .reduce(_ || _)
+
    // 解码逻辑需要确保只处理有效范围内的输入数据
    when(io.Isposit) {
      decode1.io.posit      := io.posit_i1
@@ -711,7 +716,11 @@
      // 直接使用greater模块的posit输出
      for(i <- 0 until MAX_VECTOR_SIZE) {
        when(valid_range(i)) {
-         io.posit_o(i) := greater.io.posit_o(i)
+         io.posit_o(i) := Mux(
+           io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR,
+           rawPositNaR,
+           Mux(io.posit_i1(i).asSInt >= io.posit_i2(i).asSInt, io.posit_i1(i), io.posit_i2(i))
+         )
        }
      }
    }.elsewhen(io.op === 9.U) {  // Less - 比较并输出较小值
@@ -736,7 +745,11 @@
      // 直接使用less模块的posit输出
      for(i <- 0 until MAX_VECTOR_SIZE) {
        when(valid_range(i)) {
-         io.posit_o(i) := less.io.posit_o(i)
+         io.posit_o(i) := Mux(
+           io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR,
+           rawPositNaR,
+           Mux(io.posit_i1(i).asSInt <= io.posit_i2(i).asSInt, io.posit_i1(i), io.posit_i2(i))
+         )
        }
      }
    }.elsewhen(io.op === 10.U) {  // TranInt - Posit转Int
@@ -972,7 +985,7 @@
      
      // 根据Outposit信号选择输出格式
      when(io.Outposit) {
-       io.posit_dot_o := posit_result
+       io.posit_dot_o := Mux(io.Isposit && dotHasRawPositNaR, rawPositNaR, posit_result)
        io.float_dot_o := 0.U(FLOAT_WIDTH.W)
      }.otherwise {
        io.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
@@ -1149,7 +1162,11 @@
        // 只处理有效范围内的结果
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
-           io.posit_o(i) := posit_results(i)
+           when(io.Isposit && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR)) {
+             io.posit_o(i) := rawPositNaR
+           }.otherwise {
+             io.posit_o(i) := posit_results(i)
+           }
            io.float_o(i) := 0.U(FLOAT_WIDTH.W)
          }
        }

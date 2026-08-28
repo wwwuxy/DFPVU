@@ -340,9 +340,10 @@ void add_case(std::vector<TestCase>& tests, const std::string& operation, const 
 std::vector<TestCase> build_tests() {
   std::vector<TestCase> tests;
   uint32_t tag = 1;
-  const std::array<std::pair<std::string, std::pair<std::array<uint32_t, kLanes>, std::array<uint32_t, kLanes>>>, 4> binary_boundaries{{
+  const std::array<std::pair<std::string, std::pair<std::array<uint32_t, kLanes>, std::array<uint32_t, kLanes>>>, 5> binary_boundaries{{
       {"zero", {repeat(0), repeat(kOne)}},
       {"NaR", {repeat(kNaR), repeat(kOne)}},
+      {"NaR-rhs", {repeat(kOne), repeat(kNaR)}},
       {"extrema", {{kMaxPos, kMinPos, kNegMaxPos, kMinPos}, {kOne, kTwo, kNegOne, kNegTwo}}},
       {"mixed-sign", {{kOne, kNegOne, kTwo, kNegTwo}, repeat(kOne)}}}};
 
@@ -353,6 +354,13 @@ std::vector<TestCase> build_tests() {
       request.posit_i2 = boundary.second.second;
       add_case(tests, "op" + std::to_string(op), boundary.first, request, ResultKind::kPositVector);
     }
+  }
+
+  for (uint8_t op : {uint8_t{8}, uint8_t{9}}) {
+    PvuRequest request = base_request(tag++, op);
+    request.posit_i1 = {0x12345678u, 0xedcba988u, kMaxPos, kNegMaxPos};
+    request.posit_i2 = request.posit_i1;
+    add_case(tests, "op" + std::to_string(op), "raw-equality", request, ResultKind::kPositVector);
   }
 
   const std::array<std::pair<std::string, std::array<uint32_t, kLanes>>, 4> unary_boundaries{{
@@ -379,10 +387,11 @@ std::vector<TestCase> build_tests() {
   using PositPair = std::pair<std::array<uint32_t, kLanes>, std::array<uint32_t, kLanes>>;
   constexpr uint32_t kThreeHalves = 0x44000000u;
   constexpr uint32_t kNegThreeHalves = 0xbc000000u;
-  const std::array<std::pair<std::string, PositPair>, 7> dot_boundaries{{
+  const std::array<std::pair<std::string, PositPair>, 8> dot_boundaries{{
       std::make_pair(std::string("cancellation"), PositPair{{kOne, kNegOne, kTwo, kNegTwo}, repeat(kOne)}),
       std::make_pair(std::string("zero"), PositPair{repeat(0), repeat(kOne)}),
       std::make_pair(std::string("NaR"), PositPair{repeat(kNaR), repeat(kOne)}),
+      std::make_pair(std::string("NaR-rhs-active-lane"), PositPair{repeat(kOne), {kOne, kOne, kNaR, kOne}}),
       std::make_pair(std::string("extrema"), PositPair{{kMaxPos, kMinPos, kNegMaxPos, kMinPos}, {kMinPos, kMaxPos, kMinPos, kNegMaxPos}}),
       std::make_pair(std::string("mixed-sign"), PositPair{{kOne, kNegOne, kTwo, kNegTwo}, {kTwo, kNegTwo, kNegOne, kOne}}),
       std::make_pair(std::string("positive-near-full-scale"), PositPair{repeat(kThreeHalves), repeat(kThreeHalves)}),
