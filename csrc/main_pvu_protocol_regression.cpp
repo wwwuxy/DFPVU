@@ -377,12 +377,16 @@ std::vector<TestCase> build_tests() {
   }
 
   using PositPair = std::pair<std::array<uint32_t, kLanes>, std::array<uint32_t, kLanes>>;
-  const std::array<std::pair<std::string, PositPair>, 5> dot_boundaries{{
+  constexpr uint32_t kThreeHalves = 0x44000000u;
+  constexpr uint32_t kNegThreeHalves = 0xbc000000u;
+  const std::array<std::pair<std::string, PositPair>, 7> dot_boundaries{{
       std::make_pair(std::string("cancellation"), PositPair{{kOne, kNegOne, kTwo, kNegTwo}, repeat(kOne)}),
       std::make_pair(std::string("zero"), PositPair{repeat(0), repeat(kOne)}),
       std::make_pair(std::string("NaR"), PositPair{repeat(kNaR), repeat(kOne)}),
       std::make_pair(std::string("extrema"), PositPair{{kMaxPos, kMinPos, kNegMaxPos, kMinPos}, {kMinPos, kMaxPos, kMinPos, kNegMaxPos}}),
-      std::make_pair(std::string("mixed-sign"), PositPair{{kOne, kNegOne, kTwo, kNegTwo}, {kTwo, kNegTwo, kNegOne, kOne}})}};
+      std::make_pair(std::string("mixed-sign"), PositPair{{kOne, kNegOne, kTwo, kNegTwo}, {kTwo, kNegTwo, kNegOne, kOne}}),
+      std::make_pair(std::string("positive-near-full-scale"), PositPair{repeat(kThreeHalves), repeat(kThreeHalves)}),
+      std::make_pair(std::string("negative-near-full-scale"), PositPair{repeat(kThreeHalves), repeat(kNegThreeHalves)})}};
   for (const auto& boundary : dot_boundaries) {
     PvuRequest request = base_request(tag++, 5);
     request.posit_i1 = boundary.second.first;
