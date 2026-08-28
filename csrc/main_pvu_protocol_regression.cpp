@@ -191,6 +191,10 @@ uint64_t encode_fp(long double value, FpFormat format) {
   return (sign << (width - 1)) | (exponent_field << format.fraction_bits) | fraction;
 }
 
+uint32_t ref_posit_convert(uint32_t raw, uint8_t destination_width) {
+  return destination_width == 32 ? raw : p32_to_pX2(posit(raw), destination_width).v;
+}
+
 uint32_t ref_float_to_posit(uint64_t raw, uint8_t mode) {
   const long double decoded = decode_fp(raw, kFpFormats.at(mode));
   if (!std::isfinite(decoded)) return kNaR;
@@ -209,7 +213,7 @@ PvuResponse expected_for(const PvuRequest& request, ResultKind kind) {
   switch (kind) {
     case ResultKind::kPositVector:
       for (size_t lane = 0; lane < kLanes; ++lane) {
-        if (request.op == 6) response.posit[lane] = request.posit_i1[lane];
+        if (request.op == 6) response.posit[lane] = ref_posit_convert(request.posit_i1[lane], request.dst_posit_width);
         else response.posit[lane] = ref_binary(request.op, request.posit_i1[lane], request.posit_i2[lane]);
       }
       break;
@@ -361,6 +365,15 @@ std::vector<TestCase> build_tests() {
       add_case(tests, "op" + std::to_string(op), boundary.first, request,
                op == 10 ? ResultKind::kIntVector : ResultKind::kPositVector);
     }
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 6);
+    request.src_posit_width = 32;
+    request.dst_posit_width = 16;
+    // 0x40018001 has guard/sticky bits that round upward when encoded as P16.
+    request.posit_i1 = {0x40018001u, 0xbffe7fffu, kNaR, kMaxPos};
+    add_case(tests, "op6", "p32-to-p16-rne", request, ResultKind::kPositVector);
   }
 
   using PositPair = std::pair<std::array<uint32_t, kLanes>, std::array<uint32_t, kLanes>>;
