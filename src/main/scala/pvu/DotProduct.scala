@@ -10,6 +10,7 @@ class DotProduct(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: In
   var FRAC_WIDTH: Int = POSIT_WIDTH - ES - 3
   var MUL_WIDTH: Int  = 2 * (FRAC_WIDTH + 1)
   val SUM_WIDTH: Int  = MUL_WIDTH + log2Ceil(VECTOR_SIZE)
+  val ACC_WIDTH: Int  = SUM_WIDTH + 1
 
   val io = IO(new Bundle {
     val pir_sign1_i = Input(Vec(VECTOR_SIZE, UInt(1.W)))
@@ -59,19 +60,19 @@ class DotProduct(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: In
   pir_frac_cmp               := frac_compare.io.pir_frac_align
 
 // Convert aligned negative mantissas to explicitly sized two's-complement operands.
-  val pir_frac_cmp_signed = Wire(Vec(VECTOR_SIZE, SInt(SUM_WIDTH.W)))
+  val pir_frac_cmp_signed = Wire(Vec(VECTOR_SIZE, SInt(ACC_WIDTH.W)))
   for (i <- 0 until VECTOR_SIZE) {
-    val alignedMagnitude = pir_frac_cmp(i).pad(SUM_WIDTH).asSInt
+    val alignedMagnitude = pir_frac_cmp(i).pad(ACC_WIDTH).asSInt
     pir_frac_cmp_signed(i) := Mux(pir_sign_mul(i) === 1.U, -alignedMagnitude, alignedMagnitude)
   }
 
 // Accumulation through the CSA tree
-  val sum          = Wire(UInt(SUM_WIDTH.W))
-  val carry        = Wire(UInt(SUM_WIDTH.W))
-  val reducedSum   = Wire(SInt(SUM_WIDTH.W))
-  val sumMagnitude = Wire(UInt(SUM_WIDTH.W))
+  val sum          = Wire(UInt(ACC_WIDTH.W))
+  val carry        = Wire(UInt(ACC_WIDTH.W))
+  val reducedSum   = Wire(SInt(ACC_WIDTH.W))
+  val sumMagnitude = Wire(UInt(ACC_WIDTH.W))
 
-  val csaTree = Module(new CsaTree(VECTOR_SIZE, SUM_WIDTH, SUM_WIDTH))
+  val csaTree = Module(new CsaTree(VECTOR_SIZE, ACC_WIDTH, ACC_WIDTH))
   csaTree.io.operands_i := VecInit(pir_frac_cmp_signed.map(_.asUInt))
   sum                   := csaTree.io.sum_o
   carry                 := csaTree.io.carry_o
@@ -82,5 +83,5 @@ class DotProduct(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: In
 // Output result
   io.pir_sign_o := reducedSum < 0.S
   io.pir_exp_o  := Mux(sumMagnitude === 0.U, 0.S, pir_exp_cmp)
-  io.pir_frac_o := sumMagnitude.pad(SUM_WIDTH + 1)
+  io.pir_frac_o := sumMagnitude
 }
