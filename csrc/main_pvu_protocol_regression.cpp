@@ -356,6 +356,25 @@ std::vector<TestCase> build_tests() {
     }
   }
 
+  for (uint8_t op : {uint8_t{1}, uint8_t{2}, uint8_t{3}, uint8_t{4}}) {
+    const uint32_t finite_lhs = op == 2 ? kTwo : kOne;
+    for (size_t lane = 0; lane < kLanes; ++lane) {
+      PvuRequest lhs_nar = base_request(tag++, op);
+      lhs_nar.posit_i1 = repeat(finite_lhs);
+      lhs_nar.posit_i2 = repeat(kOne);
+      lhs_nar.posit_i1[lane] = kNaR;
+      add_case(tests, "op" + std::to_string(op), "NaR-lhs-lane-" + std::to_string(lane),
+               lhs_nar, ResultKind::kPositVector);
+
+      PvuRequest rhs_nar = base_request(tag++, op);
+      rhs_nar.posit_i1 = repeat(finite_lhs);
+      rhs_nar.posit_i2 = repeat(kOne);
+      rhs_nar.posit_i2[lane] = kNaR;
+      add_case(tests, "op" + std::to_string(op), "NaR-rhs-lane-" + std::to_string(lane),
+               rhs_nar, ResultKind::kPositVector);
+    }
+  }
+
   for (uint8_t op : {uint8_t{8}, uint8_t{9}}) {
     PvuRequest request = base_request(tag++, op);
     request.posit_i1 = {0x12345678u, 0xedcba988u, kMaxPos, kNegMaxPos};
@@ -387,11 +406,10 @@ std::vector<TestCase> build_tests() {
   using PositPair = std::pair<std::array<uint32_t, kLanes>, std::array<uint32_t, kLanes>>;
   constexpr uint32_t kThreeHalves = 0x44000000u;
   constexpr uint32_t kNegThreeHalves = 0xbc000000u;
-  const std::array<std::pair<std::string, PositPair>, 8> dot_boundaries{{
+  const std::array<std::pair<std::string, PositPair>, 7> dot_boundaries{{
       std::make_pair(std::string("cancellation"), PositPair{{kOne, kNegOne, kTwo, kNegTwo}, repeat(kOne)}),
       std::make_pair(std::string("zero"), PositPair{repeat(0), repeat(kOne)}),
       std::make_pair(std::string("NaR"), PositPair{repeat(kNaR), repeat(kOne)}),
-      std::make_pair(std::string("NaR-rhs-active-lane"), PositPair{repeat(kOne), {kOne, kOne, kNaR, kOne}}),
       std::make_pair(std::string("extrema"), PositPair{{kMaxPos, kMinPos, kNegMaxPos, kMinPos}, {kMinPos, kMaxPos, kMinPos, kNegMaxPos}}),
       std::make_pair(std::string("mixed-sign"), PositPair{{kOne, kNegOne, kTwo, kNegTwo}, {kTwo, kNegTwo, kNegOne, kOne}}),
       std::make_pair(std::string("positive-near-full-scale"), PositPair{repeat(kThreeHalves), repeat(kThreeHalves)}),
@@ -401,6 +419,20 @@ std::vector<TestCase> build_tests() {
     request.posit_i1 = boundary.second.first;
     request.posit_i2 = boundary.second.second;
     add_case(tests, "op5", boundary.first, request, ResultKind::kPositDot);
+  }
+
+  for (size_t lane = 0; lane < kLanes; ++lane) {
+    PvuRequest lhs_nar = base_request(tag++, 5);
+    lhs_nar.posit_i1 = repeat(kOne);
+    lhs_nar.posit_i2 = repeat(kOne);
+    lhs_nar.posit_i1[lane] = kNaR;
+    add_case(tests, "op5", "NaR-lhs-lane-" + std::to_string(lane), lhs_nar, ResultKind::kPositDot);
+
+    PvuRequest rhs_nar = base_request(tag++, 5);
+    rhs_nar.posit_i1 = repeat(kOne);
+    rhs_nar.posit_i2 = repeat(kOne);
+    rhs_nar.posit_i2[lane] = kNaR;
+    add_case(tests, "op5", "NaR-rhs-lane-" + std::to_string(lane), rhs_nar, ResultKind::kPositDot);
   }
 
   const std::vector<uint32_t> activations = load_words("test_src/posit_activations.bin", 24);
