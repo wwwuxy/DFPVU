@@ -337,6 +337,15 @@ void add_case(std::vector<TestCase>& tests, const std::string& operation, const 
   tests.push_back({operation, category, request, expected_for(request, kind), kind});
 }
 
+void add_int_case(std::vector<TestCase>& tests, const std::string& category, PvuRequest request,
+                  std::array<int32_t, kLanes> expected_integer) {
+  PvuResponse expected{};
+  expected.tag = request.tag;
+  expected.op = request.op;
+  expected.integer = expected_integer;
+  tests.push_back({"op10", category, request, expected, ResultKind::kIntVector});
+}
+
 std::vector<TestCase> build_tests() {
   std::vector<TestCase> tests;
   uint32_t tag = 1;
@@ -392,6 +401,54 @@ std::vector<TestCase> build_tests() {
       add_case(tests, "op" + std::to_string(op), boundary.first, request,
                op == 10 ? ResultKind::kIntVector : ResultKind::kPositVector);
     }
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 10);
+    request.posit_i1 = {0x38000000u, 0xc8000000u, 0x44000000u, 0xbc000000u};
+    add_int_case(tests, "rne-even-ties", request, {0, 0, 2, -2});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 10);
+    request.posit_i1 = {0x4e000000u, 0xb2000000u, 0x51000000u, 0xaf000000u};
+    add_int_case(tests, "general-rne-even-ties", request, {4, -4, 4, -4});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 10);
+    request.posit_i1 = {kNaR, kMaxPos, kNegMaxPos, kMinPos};
+    add_int_case(tests, "nar-and-finite-extrema", request,
+                 {0, std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::min(), 0});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 10);
+    request.posit_i1 = {0, kMinPos, 0xffffffffu, kNaR};
+    add_int_case(tests, "zero-and-signed-minpos", request, {0, 0, 0, 0});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 10);
+    request.vector_size = 2;
+    request.posit_i1 = {kOne, kNegOne, kMaxPos, kNegMaxPos};
+    add_int_case(tests, "inactive-lanes-zero", request, {1, -1, 0, 0});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 10);
+    request.posit_i1 = {0x7fafffffu, 0x7fb00000u, 0x80500001u, 0x80500000u};
+    add_int_case(tests, "saturation-edges", request,
+                 {2147482624, std::numeric_limits<int32_t>::max(), -2147482624,
+                  std::numeric_limits<int32_t>::min()});
+  }
+
+  std::mt19937 op10_seeded(0x10c032u);
+  for (size_t sample = 0; sample < 256; ++sample) {
+    PvuRequest request = base_request(tag++, 10);
+    for (size_t lane = 0; lane < kLanes; ++lane) request.posit_i1[lane] = op10_seeded();
+    add_case(tests, "op10", "seed-0x10c032-" + std::to_string(sample), request,
+             ResultKind::kIntVector);
   }
 
   {
