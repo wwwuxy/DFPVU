@@ -372,6 +372,17 @@ void add_float_case(std::vector<TestCase>& tests, uint8_t mode, const std::strin
                    ResultKind::kFloatVector});
 }
 
+void add_float_to_posit_case(std::vector<TestCase>& tests, uint8_t mode,
+                             const std::string& category, PvuRequest request,
+                             std::array<uint32_t, kLanes> expected_posit) {
+  PvuResponse expected{};
+  expected.tag = request.tag;
+  expected.op = request.op;
+  expected.posit = expected_posit;
+  tests.push_back({"op7-fp" + std::to_string(mode) + "-to-posit", category, request, expected,
+                   ResultKind::kFloatVector});
+}
+
 void set_p32_to_p16(PvuRequest& request) {
   request.src_posit_width = 32;
   request.dst_posit_width = 16;
@@ -666,6 +677,60 @@ std::vector<TestCase> build_tests() {
     request.float_mode = directed.mode;
     request.posit_i1 = directed.input;
     add_float_case(tests, directed.mode, directed.category, request, directed.expected);
+  }
+
+  struct DirectedFloatToPositCase {
+    uint8_t mode;
+    const char* category;
+    std::array<uint64_t, kLanes> input;
+    std::array<uint32_t, kLanes> expected;
+  };
+  const std::array<DirectedFloatToPositCase, 12> float_to_posit_directed{{
+      {0, "signed-zero-and-subnormal", {0x0, 0x8, 0x1, 0x9},
+       {0x00000000u, 0x00000000u, 0x38000000u, 0xc8000000u}},
+      {0, "finite-high-and-special", {0x3, 0xb, 0x4, 0x7},
+       {0x44000000u, 0xbc000000u, kNaR, kNaR}},
+
+      {1, "signed-zero-and-subnormal", {0x00, 0x80, 0x01, 0x81},
+       {0x00000000u, 0x00000000u, 0x0e000000u, 0xf2000000u}},
+      {1, "finite-high-and-special", {0x77, 0xf7, 0x78, 0x79},
+       {0x6f800000u, 0x90800000u, kNaR, kNaR}},
+
+      {2, "signed-zero-and-subnormal", {0x0000, 0x8000, 0x0001, 0x8001},
+       {0x00000000u, 0x00000000u, 0x01000000u, 0xff000000u}},
+      {2, "finite-high-and-special", {0x7bff, 0xfbff, 0x7c00, 0x7c01},
+       {0x7bffc000u, 0x84004000u, kNaR, kNaR}},
+
+      {3, "signed-zero-and-subnormal-saturation",
+       {0x00000000, 0x80000000, 0x00000001, 0x80000001},
+       {0x00000000u, 0x00000000u, kMinPos, 0xffffffffu}},
+      {3, "finite-high-saturation-and-special",
+       {0x7f7fffff, 0xff7fffff, 0x7f800000, 0x7fc00001},
+       {kMaxPos, kNegMaxPos, kNaR, kNaR}},
+      {3, "rne-even-ties-and-carry", {0x49800001, 0x49800003, 0x4b7fffff, 0xcb7fffff},
+       {0x7e000000u, 0x7e000002u, 0x7f000000u, 0x81000000u}},
+
+      {4, "signed-zero-and-subnormal-saturation",
+       {0x0000000000000000ULL, 0x8000000000000000ULL, 0x0000000000000001ULL,
+        0x8000000000000001ULL},
+       {0x00000000u, 0x00000000u, kMinPos, 0xffffffffu}},
+      {4, "finite-high-saturation-and-special",
+       {0x7fefffffffffffffULL, 0xffefffffffffffffULL, 0x7ff0000000000000ULL,
+        0x7ff8000000000001ULL},
+       {kMaxPos, kNegMaxPos, kNaR, kNaR}},
+      {4, "single-rne-and-carry",
+       {0x413000005fffffffULL, 0xc13000005fffffffULL, 0x416fffffffffffffULL,
+        0xc16fffffffffffffULL},
+       {0x7e000001u, 0x81ffffffu, 0x7f000000u, 0x81000000u}},
+  }};
+  for (const DirectedFloatToPositCase& directed : float_to_posit_directed) {
+    PvuRequest request = base_request(tag++, 7);
+    request.is_posit = false;
+    request.out_posit = true;
+    request.float_to_posit = true;
+    request.float_mode = directed.mode;
+    request.float_i = directed.input;
+    add_float_to_posit_case(tests, directed.mode, directed.category, request, directed.expected);
   }
 
   // Fixed seed makes this supplemental SoftPosit corpus reproducible.
