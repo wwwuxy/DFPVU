@@ -346,6 +346,21 @@ void add_int_case(std::vector<TestCase>& tests, const std::string& category, Pvu
   tests.push_back({"op10", category, request, expected, ResultKind::kIntVector});
 }
 
+void add_posit_case(std::vector<TestCase>& tests, const std::string& operation,
+                    const std::string& category, PvuRequest request,
+                    std::array<uint32_t, kLanes> expected_posit) {
+  PvuResponse expected{};
+  expected.tag = request.tag;
+  expected.op = request.op;
+  expected.posit = expected_posit;
+  tests.push_back({operation, category, request, expected, ResultKind::kPositVector});
+}
+
+void set_p32_to_p16(PvuRequest& request) {
+  request.src_posit_width = 32;
+  request.dst_posit_width = 16;
+}
+
 std::vector<TestCase> build_tests() {
   std::vector<TestCase> tests;
   uint32_t tag = 1;
@@ -397,6 +412,7 @@ std::vector<TestCase> build_tests() {
   for (uint8_t op : {uint8_t{6}, uint8_t{10}}) {
     for (const auto& boundary : unary_boundaries) {
       PvuRequest request = base_request(tag++, op);
+      if (op == 6) set_p32_to_p16(request);
       request.posit_i1 = boundary.second;
       add_case(tests, "op" + std::to_string(op), boundary.first, request,
                op == 10 ? ResultKind::kIntVector : ResultKind::kPositVector);
@@ -455,6 +471,33 @@ std::vector<TestCase> build_tests() {
     PvuRequest request = base_request(tag++, 6);
     request.src_posit_width = 32;
     request.dst_posit_width = 16;
+    request.posit_i1 = {0x40008000u, 0x40018000u, 0xbfff8000u, 0xbffe8000u};
+    add_posit_case(tests, "op6", "p32-to-p16-rne-ties", request,
+                   {0x40000000u, 0x40020000u, 0xc0000000u, 0xbffe0000u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 6);
+    request.src_posit_width = 32;
+    request.dst_posit_width = 16;
+    request.posit_i1 = {0, kNaR, 0x7fff8000u, 0x80008000u};
+    add_posit_case(tests, "op6", "p32-to-p16-special-saturation", request,
+                   {0, kNaR, 0x7fff0000u, 0x80010000u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 6);
+    request.src_posit_width = 32;
+    request.dst_posit_width = 16;
+    request.posit_i1 = {0x47ff8000u, 0xb8008000u, 0x00000001u, 0xffffffffu};
+    add_posit_case(tests, "op6", "p32-to-p16-round-carry-and-minpos", request,
+                   {0x48000000u, 0xb8000000u, 0x00010000u, 0xffff0000u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 6);
+    request.src_posit_width = 32;
+    request.dst_posit_width = 16;
     // 0x40018001 has guard/sticky bits that round upward when encoded as P16.
     request.posit_i1 = {0x40018001u, 0xbffe7fffu, kNaR, kMaxPos};
     add_case(tests, "op6", "p32-to-p16-rne", request, ResultKind::kPositVector);
@@ -498,6 +541,7 @@ std::vector<TestCase> build_tests() {
   for (size_t sample = 0; sample + 3 < activations.size() && sample + 3 < weights.size(); sample += 4) {
     for (uint8_t op : {uint8_t{1}, uint8_t{2}, uint8_t{3}, uint8_t{4}, uint8_t{5}, uint8_t{6}, uint8_t{8}, uint8_t{9}, uint8_t{10}}) {
       PvuRequest request = base_request(tag++, op);
+      if (op == 6) set_p32_to_p16(request);
       for (size_t lane = 0; lane < kLanes; ++lane) {
         request.posit_i1[lane] = activations[sample + lane];
         request.posit_i2[lane] = weights[sample + lane];
@@ -554,6 +598,7 @@ std::vector<TestCase> build_tests() {
     for (size_t lane = 0; lane < kLanes; ++lane) { lhs[lane] = seeded(); rhs[lane] = seeded(); }
     for (uint8_t op : {uint8_t{1}, uint8_t{2}, uint8_t{3}, uint8_t{4}, uint8_t{5}, uint8_t{6}, uint8_t{8}, uint8_t{9}, uint8_t{10}}) {
       PvuRequest request = base_request(tag++, op);
+      if (op == 6) set_p32_to_p16(request);
       request.posit_i1 = lhs;
       request.posit_i2 = rhs;
       add_case(tests, "op" + std::to_string(op), "seed-0x5eed1234-" + std::to_string(sample), request,

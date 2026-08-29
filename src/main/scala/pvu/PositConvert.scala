@@ -163,4 +163,46 @@ class PositConvert(
       io.pir_frac_o(i) := frac_result
     }
   }
+}
+
+/** Convert raw Posit32 to raw Posit16 in a 32-bit left-aligned container. */
+class Posit32ToPosit16(val VECTOR_SIZE: Int) extends Module {
+  require(VECTOR_SIZE > 0, "vector size must be positive")
+
+  val io = IO(new Bundle {
+    val posit_i = Input(Vec(VECTOR_SIZE, UInt(32.W)))
+    val posit_o = Output(Vec(VECTOR_SIZE, UInt(32.W)))
+  })
+
+  private val nar = "h80000000".U(32.W)
+  private val increment = "h00010000".U(32.W)
+  private val maxPosit16Magnitude = "h7fff".U(16.W)
+
+  for (i <- 0 until VECTOR_SIZE) {
+    val raw = io.posit_i(i)
+    val sign = raw(31)
+    val magnitude = Mux(sign, (~raw).asUInt + 1.U(32.W), raw)
+
+    // Posit16 occupies bits 31:16. Bit 15 is the guard and bits 14:0
+    // form the sticky term; bit 16 is the retained LSB for ties-to-even.
+    val chopped = Cat(magnitude(31, 16), 0.U(16.W))
+    val guard = magnitude(15)
+    val sticky = magnitude(14, 0).orR
+    val retainedLsb = magnitude(16)
+    val atMaxPosit16 = magnitude(31, 16) === maxPosit16Magnitude
+    val roundUp = guard && (sticky || retainedLsb) && !atMaxPosit16
+    val rounded = chopped + Mux(roundUp, increment, 0.U(32.W))
+
+    // SoftPosit saturates any nonzero magnitude below Posit16 minpos to
+    // minpos instead of rounding it to zero.
+    val saturatedMagnitude = Mux(rounded === 0.U, increment, rounded)
+    val signedResult =
+      Mux(sign, (~saturatedMagnitude).asUInt + 1.U(32.W), saturatedMagnitude)
+
+    io.posit_o(i) := Mux(
+      raw === 0.U || raw === nar,
+      raw,
+      signedResult
+    )
+  }
 } 
