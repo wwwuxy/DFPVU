@@ -77,6 +77,12 @@ std::string hex32(uint32_t value) {
   return out.str();
 }
 
+std::string hex64(uint64_t value) {
+  std::ostringstream out;
+  out << "0x" << std::hex << std::setw(16) << std::setfill('0') << value;
+  return out.str();
+}
+
 std::string vector_hex(const std::array<uint32_t, kLanes>& values) {
   std::ostringstream out;
   out << "{";
@@ -356,6 +362,16 @@ void add_posit_case(std::vector<TestCase>& tests, const std::string& operation,
   tests.push_back({operation, category, request, expected, ResultKind::kPositVector});
 }
 
+void add_float_case(std::vector<TestCase>& tests, uint8_t mode, const std::string& category,
+                    PvuRequest request, std::array<uint64_t, kLanes> expected_float) {
+  PvuResponse expected{};
+  expected.tag = request.tag;
+  expected.op = request.op;
+  expected.floating = expected_float;
+  tests.push_back({"op7-posit-to-fp" + std::to_string(mode), category, request, expected,
+                   ResultKind::kFloatVector});
+}
+
 void set_p32_to_p16(PvuRequest& request) {
   request.src_posit_width = 32;
   request.dst_posit_width = 16;
@@ -590,6 +606,68 @@ std::vector<TestCase> build_tests() {
       add_case(tests, "op7-posit-to-fp" + std::to_string(mode), "seeded-binary-" + std::to_string(sample / 4), request, ResultKind::kFloatVector);
     }
   }
+
+  struct DirectedPositToFloatCase {
+    uint8_t mode;
+    const char* category;
+    std::array<uint32_t, kLanes> input;
+    std::array<uint64_t, kLanes> expected;
+  };
+  const std::array<DirectedPositToFloatCase, 18> posit_to_float_directed{{
+      {0, "special-and-signed-underflow", {kNaR, 0, kMinPos, 0xffffffffu},
+       {0x5, 0x0, 0x0, 0x8}},
+      {0, "subnormal-range", {0x38000000u, 0xc8000000u, 0x44000000u, 0xbc000000u},
+       {0x1, 0x9, 0x3, 0xb}},
+      {0, "subnormal-to-infinity-transition", {0x46000000u, 0xba000000u, kMaxPos, kNegMaxPos},
+       {0x4, 0xc, 0x4, 0xc}},
+      {0, "rne-even-and-overflow-carry", {0x3c000000u, 0x42000000u, 0x46000000u, 0xba000000u},
+       {0x2, 0x2, 0x4, 0xc}},
+
+      {1, "special-and-signed-underflow", {kNaR, 0, kMinPos, 0xffffffffu},
+       {0x79, 0x00, 0x00, 0x80}},
+      {1, "subnormal-normal-transition", {0x0e000000u, 0xf2000000u, 0x17000000u, 0x17800000u},
+       {0x01, 0x81, 0x07, 0x08}},
+      {1, "max-finite-and-overflow", {0x6f800000u, 0x90800000u, 0x6fc00000u, 0x90400000u},
+       {0x77, 0xf7, 0x78, 0xf8}},
+      {1, "rne-even-and-significand-carry", {0x40800000u, 0x41800000u, 0x47800000u, 0xb8800000u},
+       {0x38, 0x3a, 0x40, 0xc0}},
+
+      {2, "special-and-signed-underflow", {kNaR, 0, kMinPos, 0xffffffffu},
+       {0x7c01, 0x0000, 0x0000, 0x8000}},
+      {2, "subnormal-normal-transition", {0x01000000u, 0xff000000u, 0x05ff8000u, 0x05ffc000u},
+       {0x0001, 0x8001, 0x03ff, 0x0400}},
+      {2, "max-finite-and-overflow", {0x7bffc000u, 0x84004000u, 0x7bffe000u, 0x84002000u},
+       {0x7bff, 0xfbff, 0x7c00, 0xfc00}},
+      {2, "rne-even-and-significand-carry", {0x40010000u, 0x40030000u, 0x47ff0000u, 0xb8010000u},
+       {0x3c00, 0x3c02, 0x4000, 0xc000}},
+
+      {3, "special-and-reachable-normal-minimum", {kNaR, 0, kMinPos, 0xffffffffu},
+       {0x7f800001, 0x00000000, 0x03800000, 0x83800000}},
+      {3, "reachable-normal-maximum", {kMaxPos, kNegMaxPos, kOne, kNegOne},
+       {0x7b800000, 0xfb800000, 0x3f800000, 0xbf800000}},
+      {3, "rne-even-and-significand-carry", {0x40000008u, 0x40000018u, 0x47fffff8u, 0xb8000008u},
+       {0x3f800000, 0x3f800002, 0x40000000, 0xc0000000}},
+
+      {4, "special-and-reachable-normal-minimum", {kNaR, 0, kMinPos, 0xffffffffu},
+       {0x7ff0000000000001ULL, 0x0000000000000000ULL, 0x3870000000000000ULL,
+        0xb870000000000000ULL}},
+      {4, "reachable-normal-maximum", {kMaxPos, kNegMaxPos, kOne, kNegOne},
+       {0x4770000000000000ULL, 0xc770000000000000ULL, 0x3ff0000000000000ULL,
+        0xbff0000000000000ULL}},
+      {4, "exact-fixed-point-alignment", {0x40000001u, 0x40000003u, 0x47ffffffu, kTwo},
+       {0x3ff0000002000000ULL, 0x3ff0000006000000ULL, 0x3ffffffffe000000ULL,
+        0x4000000000000000ULL}},
+  }};
+  for (const DirectedPositToFloatCase& directed : posit_to_float_directed) {
+    PvuRequest request = base_request(tag++, 7);
+    request.is_posit = true;
+    request.out_posit = false;
+    request.float_to_posit = false;
+    request.float_mode = directed.mode;
+    request.posit_i1 = directed.input;
+    add_float_case(tests, directed.mode, directed.category, request, directed.expected);
+  }
+
   // Fixed seed makes this supplemental SoftPosit corpus reproducible.
   std::mt19937 seeded(0x5eed1234u);
   for (size_t sample = 0; sample < 8; ++sample) {
@@ -629,7 +707,12 @@ bool matches(const TestCase& test, const PvuResponse& actual, std::string& reaso
       if (actual.posit[lane] != test.expected.posit[lane]) { reason = "posit lane " + std::to_string(lane) + " expected=" + hex32(test.expected.posit[lane]) + " got=" + hex32(actual.posit[lane]); return false; }
     } else if (test.kind == ResultKind::kFloatVector) {
       const unsigned width = 1 + kFpFormats[test.request.float_mode].exponent_bits + kFpFormats[test.request.float_mode].fraction_bits;
-      if ((actual.floating[lane] & width_mask(width)) != test.expected.floating[lane]) { reason = "float lane " + std::to_string(lane) + " mismatch"; return false; }
+      const uint64_t actual_float = actual.floating[lane] & width_mask(width);
+      if (actual_float != test.expected.floating[lane]) {
+        reason = "float lane " + std::to_string(lane) + " expected=" + hex64(test.expected.floating[lane]) +
+                 " got=" + hex64(actual_float);
+        return false;
+      }
     } else if (test.kind == ResultKind::kIntVector && actual.integer[lane] != test.expected.integer[lane]) {
       reason = "int lane " + std::to_string(lane) + " expected=" + std::to_string(test.expected.integer[lane]) + " got=" + std::to_string(actual.integer[lane]); return false;
     }
