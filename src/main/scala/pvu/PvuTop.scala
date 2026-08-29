@@ -307,12 +307,10 @@
    val pir_frac_rst_div = Wire(Vec(MAX_VECTOR_SIZE, UInt(DOUBLED_FRAC_WIDTH.W)))
    val pir_max_exp      = Wire(Vec(MAX_VECTOR_SIZE, SInt(SRC_EXP_WIDTH_MAX.W)))    //fraction_align
 
-   // 为精度转换添加中间变量
-   val pir_sign_convert = Wire(Vec(MAX_VECTOR_SIZE, UInt(1.W)))
-   val pir_exp_convert  = Wire(Vec(MAX_VECTOR_SIZE, SInt(DST_EXP_WIDTH_MAX.W)))
-   val pir_frac_convert = Wire(Vec(MAX_VECTOR_SIZE, UInt(DOUBLED_FRAC_WIDTH.W)))
+   val p32ToP16 = Module(new Posit32ToPosit16(MAX_VECTOR_SIZE))
+   p32ToP16.io.posit_i := io.posit_i1
 
-     //for dotproduct, output is scalar
+   // For dot product, output is scalar.
    val pir_sign_dot = Wire(UInt(1.W))
    val pir_exp_dot  = Wire(SInt(SRC_EXP_WIDTH_MAX.W))
    val pir_frac_dot = Wire(UInt(DOT_PRODUCT_WIDTH.W))
@@ -326,9 +324,6 @@
      pir_frac_rst_mul(i) := 0.U
      pir_frac_rst_div(i) := 0.U
      pir_max_exp(i)      := 0.S
-     pir_sign_convert(i) := 0.U
-     pir_exp_convert(i)  := 0.S
-     pir_frac_convert(i) := 0.U
    }
 
    pir_sign_dot := 0.U
@@ -458,28 +453,6 @@
      pir_sign_dot := dotproduct.io.pir_sign_o
      pir_exp_dot  := dotproduct.io.pir_exp_o
      pir_frac_dot := dotproduct.io.pir_frac_o
-   }.elsewhen(io.op === 6.U){  //PositConvert
-     // 定义静态值用于模块实例化
-     val dst_posit_width_int = MAX_POSIT_WIDTH
-     val dst_es_int = ES
-     
-     val convert = Module(new PositConvert(
-       MAX_POSIT_WIDTH,
-       dst_posit_width_int,
-       ES,
-       dst_es_int,
-       MAX_VECTOR_SIZE,
-       MAX_ALIGN_WIDTH
-     ))
-     
-     // 仅对操作数1进行精度转换
-     convert.io.pir_sign1_i := pir_sign
-     convert.io.pir_exp1_i  := pir_exp
-     convert.io.pir_frac1_i := pir_frac
-     
-     pir_sign_convert := convert.io.pir_sign_o
-     pir_exp_convert  := convert.io.pir_exp_o
-     pir_frac_convert := convert.io.pir_frac_o
    }.elsewhen(io.op === 7.U){  // Float和Posit相互转换
      // 根据float_mode动态选择浮点数格式
      val float2posit_out = Wire(Vec(MAX_VECTOR_SIZE, UInt(MAX_POSIT_WIDTH.W)))
@@ -993,24 +966,11 @@
      }
      
    }.elsewhen(io.op === 6.U){
-     // 精度转换操作
-     val convert_encoder = Module(new PositEncode(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, ES))
-     convert_encoder.io.pir_sign := pir_sign_convert
-     convert_encoder.io.pir_exp  := pir_exp_convert
-     convert_encoder.io.pir_frac := pir_frac_convert
-     
-     // 直接输出转换后的结果，但需要处理可能的宽度不匹配
+     // This runtime operation implements only raw P32 to left-aligned P16.
+     val isP32ToP16 = ACTUAL_SRC_POSIT_WIDTH === 32.U && ACTUAL_DST_POSIT_WIDTH === 16.U
      for(i <- 0 until MAX_VECTOR_SIZE) {
-       when(ACTUAL_DST_POSIT_WIDTH > MAX_POSIT_WIDTH.U) {
-         // 目标位宽超过最大位宽，截断
-         io.posit_o(i) := convert_encoder.io.posit(i)(MAX_POSIT_WIDTH-1, 0)
-       }.elsewhen(ACTUAL_DST_POSIT_WIDTH < MAX_POSIT_WIDTH.U) {
-         // 否则，在运行时调整位宽
-         // 计算有效位数和截断位
-         val valid_bits = ACTUAL_DST_POSIT_WIDTH - 1.U
-         io.posit_o(i) := (convert_encoder.io.posit(i) >> (MAX_POSIT_WIDTH.U - ACTUAL_DST_POSIT_WIDTH)) << (MAX_POSIT_WIDTH.U - ACTUAL_DST_POSIT_WIDTH)
-       }.otherwise {
-         io.posit_o(i) := convert_encoder.io.posit(i)
+       when(valid_range(i) && isP32ToP16) {
+         io.posit_o(i) := p32ToP16.io.posit_o(i)
        }
      }
    }.elsewhen(io.op === 7.U){
