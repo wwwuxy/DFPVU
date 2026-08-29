@@ -9,7 +9,7 @@
     7 --> Float和Posit相互转换
     8 --> 大小比较（Greater），输出较大值
     9 --> 大小比较（Less），输出较小值
-    10 --> Posit转Int（TranInt），将PIR转为整数
+    10 --> Posit转Int（TranInt），将原始Posit32转为整数
 
    Float格式由float_mode控制:
    0 --> FP4  (1位符号, 1位指数, 2位尾数)
@@ -761,13 +761,13 @@
        INT_WIDTH
      ))
      
-     // 输入PIR格式的posit数据
-     tranInt.io.pir_sign_i := pir_sign
-     tranInt.io.pir_exp_i  := pir_exp
-     tranInt.io.pir_frac_i := pir_frac
+     tranInt.io.posit_i := io.posit_i1
      
-     // 获取转换结果
-     io.int_o := tranInt.io.int_o
+     for (i <- 0 until MAX_VECTOR_SIZE) {
+       when (valid_range(i)) {
+         io.int_o(i) := tranInt.io.int_o(i)
+       }
+     }
    }
 
    //***********************//
