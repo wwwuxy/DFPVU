@@ -27,6 +27,10 @@ constexpr uint32_t kOne = 0x40000000u;
 constexpr uint32_t kNegOne = 0xc0000000u;
 constexpr uint32_t kTwo = 0x48000000u;
 constexpr uint32_t kNegTwo = 0xb8000000u;
+constexpr uint32_t kHalf = 0x38000000u;
+constexpr uint32_t kNegHalf = 0xc8000000u;
+constexpr uint32_t kQuarter = 0x30000000u;
+constexpr uint32_t kFour = 0x50000000u;
 constexpr uint32_t kMaxPos = 0x7fffffffu;
 constexpr uint32_t kMinPos = 0x00000001u;
 constexpr uint32_t kNegMaxPos = 0x80000001u;
@@ -424,6 +428,30 @@ std::vector<TestCase> build_tests() {
       add_case(tests, "op" + std::to_string(op), "NaR-rhs-lane-" + std::to_string(lane),
                rhs_nar, ResultKind::kPositVector);
     }
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.posit_i1 = {0, 0, kOne, kNaR};
+    request.posit_i2 = {0, kOne, 0, kOne};
+    add_posit_case(tests, "op4", "zero-nar-and-divide-by-zero", request,
+                   {kNaR, 0, kNaR, kNaR});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.posit_i1 = {kOne, kOne, kOne, kNegOne};
+    request.posit_i2 = {kTwo, kHalf, kNegTwo, kTwo};
+    add_posit_case(tests, "op4", "exact-reciprocals-and-signs", request,
+                   {kHalf, kTwo, kNegHalf, kNegHalf});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.posit_i1 = {kMaxPos, kMinPos, kMinPos, kMaxPos};
+    request.posit_i2 = {kFour, kQuarter, kFour, kMinPos};
+    add_posit_case(tests, "op4", "rne-even-ties-and-saturation", request,
+                   {0x7ffffffeu, 0x00000002u, kMinPos, kMaxPos});
   }
 
   for (uint8_t op : {uint8_t{8}, uint8_t{9}}) {
