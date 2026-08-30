@@ -57,6 +57,11 @@
    val SRC_EXP_WIDTH_MAX: Int  = Math.min(SRC_ND_MAX + ES + 1, 32)
    val SRC_FRAC_WIDTH_MAX: Int = LIMITED_POSIT_WIDTH + 1
    val DST_EXP_WIDTH_MAX: Int  = SRC_EXP_WIDTH_MAX
+   val DIV_SCALE_WIDTH: Int    = Math.max(SRC_EXP_WIDTH_MAX, float_exp_width + 1) + 1
+   val FLOAT_BIAS: Int            = (1 << (float_exp_width - 1)) - 1
+   val FLOAT_MAX_NORMAL_EXP: Int  = FLOAT_BIAS
+   val FLOAT_MIN_NORMAL_EXP: Int  = 1 - FLOAT_BIAS
+   val FLOAT_MIN_SUBNORMAL_EXP: Int = 1 - FLOAT_BIAS - float_frac_width
    
    // 预先计算的常量宽度
    val DOUBLED_FRAC_WIDTH: Int = Math.min(2 * (SRC_FRAC_WIDTH_MAX + 1), 128)
@@ -125,8 +130,8 @@
   // Float相关Wire定义 - 使用统一的存储
   val float_data = Wire(Vec(LIMITED_VECTOR_SIZE, new Bundle {
     val sign   = Bool()
-    val exp    = SInt(float_exp_width.W)
-    val frac   = UInt(float_frac_width.W)
+    val exp    = SInt((float_exp_width + 1).W)
+    val frac   = UInt((float_frac_width + 1).W)
     val isNaN  = Bool()
     val isInf  = Bool()
     val isZero = Bool()
@@ -134,8 +139,8 @@
 
   val float_data2 = Wire(Vec(LIMITED_VECTOR_SIZE, new Bundle {
     val sign   = Bool()
-    val exp    = SInt(float_exp_width.W)
-    val frac   = UInt(float_frac_width.W)
+    val exp    = SInt((float_exp_width + 1).W)
+    val frac   = UInt((float_frac_width + 1).W)
     val isNaN  = Bool()
     val isInf  = Bool()
     val isZero = Bool()
@@ -144,8 +149,8 @@
   // 点积相关Wire定义
   val float_dot_data = Wire(new Bundle {
     val sign   = Bool()
-    val exp    = SInt(float_exp_width.W)
-    val frac   = UInt(float_frac_width.W)
+    val exp    = SInt((float_exp_width + 1).W)
+    val frac   = UInt((float_frac_width + 1).W)
     val isNaN  = Bool()
     val isInf  = Bool()
     val isZero = Bool()
@@ -154,8 +159,8 @@
   // 结果相关Wire定义
   val float_rst_data = Wire(Vec(LIMITED_VECTOR_SIZE, new Bundle {
     val sign   = Bool()
-    val exp    = SInt(float_exp_width.W)
-    val frac   = UInt(float_frac_width.W)
+    val exp    = SInt((float_exp_width + 1).W)
+    val frac   = UInt((float_frac_width + 1).W)
     val isNaN  = Bool()
     val isInf  = Bool()
     val isZero = Bool()
@@ -246,6 +251,23 @@
    val dotHasRawPositNaR = (0 until MAX_VECTOR_SIZE)
      .map(i => valid_range(i) && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR))
      .reduce(_ || _)
+   val divInputInvalid = Wire(Vec(MAX_VECTOR_SIZE, Bool()))
+   val divInputInfinite = Wire(Vec(MAX_VECTOR_SIZE, Bool()))
+   val divInputZero = Wire(Vec(MAX_VECTOR_SIZE, Bool()))
+   for (i <- 0 until MAX_VECTOR_SIZE) {
+     val rawInvalid = io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR || io.posit_i2(i) === 0.U
+     val rawZero = !rawInvalid && io.posit_i1(i) === 0.U
+     val floatInvalid = float_data(i).isNaN || float_data2(i).isNaN ||
+       (float_data(i).isInf && float_data2(i).isInf) || (float_data(i).isZero && float_data2(i).isZero)
+     val floatInfinite = !floatInvalid && ((float_data(i).isInf && !float_data2(i).isInf) ||
+       (!float_data(i).isInf && !float_data(i).isZero && float_data2(i).isZero))
+     val floatZero = !floatInvalid && ((float_data(i).isZero && !float_data2(i).isZero) ||
+       (!float_data(i).isInf && float_data2(i).isInf))
+     divInputInvalid(i) := Mux(io.Isposit, rawInvalid, floatInvalid)
+     divInputInfinite(i) := !io.Isposit && floatInfinite
+     divInputZero(i) := Mux(io.Isposit, rawZero, floatZero)
+   }
+
 
    // 解码逻辑需要确保只处理有效范围内的输入数据
    when(io.Isposit) {
@@ -306,10 +328,13 @@
    val pir_frac_rst_mul = Wire(Vec(MAX_VECTOR_SIZE, UInt(DOUBLED_FRAC_WIDTH.W)))
    val pir_frac_rst_div = Wire(Vec(MAX_VECTOR_SIZE, UInt(DOUBLED_FRAC_WIDTH.W)))
    val posit_rst_div    = Wire(Vec(MAX_VECTOR_SIZE, UInt(MAX_POSIT_WIDTH.W)))
+   val pir_exp_rst_div  = Wire(Vec(MAX_VECTOR_SIZE, SInt(DIV_SCALE_WIDTH.W)))
    val pir_max_exp      = Wire(Vec(MAX_VECTOR_SIZE, SInt(SRC_EXP_WIDTH_MAX.W)))    //fraction_align
 
    val p32ToP16 = Module(new Posit32ToPosit16(MAX_VECTOR_SIZE))
    p32ToP16.io.posit_i := io.posit_i1
+   val divP32ToP16 = Module(new Posit32ToPosit16(MAX_VECTOR_SIZE))
+   divP32ToP16.io.posit_i := posit_rst_div
 
    // For dot product, output is scalar.
    val pir_sign_dot = Wire(UInt(1.W))
@@ -325,6 +350,7 @@
      pir_frac_rst_mul(i) := 0.U
      pir_frac_rst_div(i) := 0.U
      posit_rst_div(i)    := 0.U
+     pir_exp_rst_div(i)  := 0.S
      pir_max_exp(i)      := 0.S
    }
 
@@ -416,17 +442,31 @@
      pir_frac_rst_mul := mul.io.pir_frac_o
    
    }.elsewhen(io.op === 4.U){  //Div
-     val div_inst = Module(new Div(LIMITED_POSIT_WIDTH, LIMITED_VECTOR_SIZE, LIMITED_ALIGN_WIDTH, ES))
+     val div_inst = Module(new Div(LIMITED_POSIT_WIDTH, LIMITED_VECTOR_SIZE, LIMITED_ALIGN_WIDTH, ES, DIV_SCALE_WIDTH))
 
      div_inst.io.posit1_i    := io.posit_i1
+     div_inst.io.is_posit_i   := io.Isposit
+     div_inst.io.pir_sign1_i  := pir_sign
+     div_inst.io.pir_sign2_i  := pir_sign2
      div_inst.io.posit2_i    := io.posit_i2
-     div_inst.io.pir_exp1_i  := pir_exp
-     div_inst.io.pir_exp2_i  := pir_exp2
-     div_inst.io.pir_frac1_i := pir_frac
-     div_inst.io.pir_frac2_i := pir_frac2
+     for(i <- 0 until MAX_VECTOR_SIZE) {
+       val floatLeadingZeros1 = PriorityEncoder(Reverse(float_data(i).frac))
+       val floatLeadingZeros2 = PriorityEncoder(Reverse(float_data2(i).frac))
+       val normalizedFloatFrac1 = (float_data(i).frac << floatLeadingZeros1)(float_frac_width, 0)
+       val normalizedFloatFrac2 = (float_data2(i).frac << floatLeadingZeros2)(float_frac_width, 0)
+       val normalizedFloatExp1 = float_data(i).exp.pad(DIV_SCALE_WIDTH) - floatLeadingZeros1.zext
+       val normalizedFloatExp2 = float_data2(i).exp.pad(DIV_SCALE_WIDTH) - floatLeadingZeros2.zext
+
+       div_inst.io.pir_exp1_i(i) := Mux(io.Isposit,
+         pir_exp(i).pad(DIV_SCALE_WIDTH), normalizedFloatExp1)
+       div_inst.io.pir_exp2_i(i) := Mux(io.Isposit,
+         pir_exp2(i).pad(DIV_SCALE_WIDTH), normalizedFloatExp2)
+       div_inst.io.pir_frac1_i(i) := Mux(io.Isposit, pir_frac(i), normalizedFloatFrac1)
+       div_inst.io.pir_frac2_i(i) := Mux(io.Isposit, pir_frac2(i), normalizedFloatFrac2)
+     }
 
      pir_sign_rst     := div_inst.io.pir_sign_o
-     pir_exp_rst      := div_inst.io.pir_exp_o
+     pir_exp_rst_div  := div_inst.io.pir_exp_o
      pir_frac_rst_div := div_inst.io.pir_frac_o
      posit_rst_div    := div_inst.io.posit_o
    }.elsewhen(io.op === 5.U){  //DotProduct, 先相乘再相加，对阶在DotProduct中实现，输入向量 输出标量
@@ -795,11 +835,11 @@
    //***************//
    //**Adjust EXP**//
    //**************//
-   val pir_exp_rst_adjusied     = Wire(Vec(MAX_VECTOR_SIZE, SInt(SRC_EXP_WIDTH_MAX.W)))
+   val pir_exp_rst_adjusied     = Wire(Vec(MAX_VECTOR_SIZE, SInt(DIV_SCALE_WIDTH.W)))
    val pir_exp_rst_adjusied_dot = Wire(SInt(SRC_EXP_WIDTH_MAX.W))
 
    //初始化中间变量
-   pir_exp_rst_adjusied     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.S(SRC_EXP_WIDTH_MAX.W)))
+   pir_exp_rst_adjusied     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.S(DIV_SCALE_WIDTH.W)))
    pir_exp_rst_adjusied_dot := 0.S(SRC_EXP_WIDTH_MAX.W)
 
    // 计算调整后的指数
@@ -807,9 +847,79 @@
      pir_exp_rst_adjusied_dot := pir_exp_adjust_dot + pir_exp_dot
    }.otherwise{
      for(i <- 0 until MAX_VECTOR_SIZE){
-       pir_exp_rst_adjusied(i) := pir_exp_rst(i) + pir_exp_adjust(i)
+       when(io.op === 4.U) {
+         pir_exp_rst_adjusied(i) := pir_exp_rst_div(i) + pir_exp_adjust(i).pad(DIV_SCALE_WIDTH)
+       }.otherwise {
+         pir_exp_rst_adjusied(i) := pir_exp_rst(i) + pir_exp_adjust(i)
+       }
      }
    }
+   val pir_exp_for_posit = Wire(Vec(MAX_VECTOR_SIZE, SInt(SRC_EXP_WIDTH_MAX.W)))
+   for(i <- 0 until MAX_VECTOR_SIZE) {
+     when(io.op === 4.U && pir_exp_rst_adjusied(i) > 120.S(DIV_SCALE_WIDTH.W)) {
+       pir_exp_for_posit(i) := 120.S
+     }.elsewhen(io.op === 4.U && pir_exp_rst_adjusied(i) < -120.S(DIV_SCALE_WIDTH.W)) {
+       pir_exp_for_posit(i) := -120.S
+     }.otherwise {
+       pir_exp_for_posit(i) := pir_exp_rst_adjusied(i)
+     }
+   }
+
+   val DIV_NORM_FRAC_WIDTH = MAX_POSIT_WIDTH - ES - 2
+   val DIV_FLOAT_NORMAL_DROP = DIV_NORM_FRAC_WIDTH - (float_frac_width + 1)
+   require(DIV_FLOAT_NORMAL_DROP >= 2, "division float packing needs guard and sticky bits")
+   val div_float_results = Wire(Vec(MAX_VECTOR_SIZE, UInt(FLOAT_WIDTH.W)))
+   div_float_results := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(FLOAT_WIDTH.W)))
+   for(i <- 0 until MAX_VECTOR_SIZE) {
+     val normalizedFraction = pir_frac_normed(i)
+     val normalRetained = normalizedFraction(DIV_NORM_FRAC_WIDTH - 1, DIV_FLOAT_NORMAL_DROP)
+     val normalGuard = normalizedFraction(DIV_FLOAT_NORMAL_DROP - 1)
+     val normalSticky = normalizedFraction(DIV_FLOAT_NORMAL_DROP - 2, 0).orR
+     val normalRoundUp = normalGuard && (normalSticky || normalRetained(0))
+     val normalRounded = Cat(0.U(1.W), normalRetained) + normalRoundUp.asUInt
+     val normalCarry = normalRounded(float_frac_width + 1)
+     val normalRoundedExp = pir_exp_rst_adjusied(i) + normalCarry.asUInt.zext
+     val normalFraction = Mux(normalCarry, 0.U(float_frac_width.W), normalRounded(float_frac_width - 1, 0))
+     val normalExponent = (normalRoundedExp + FLOAT_BIAS.S(DIV_SCALE_WIDTH.W)).asUInt
+
+     val subnormalShiftSigned =
+       (DIV_NORM_FRAC_WIDTH - 1 + FLOAT_MIN_SUBNORMAL_EXP).S(DIV_SCALE_WIDTH.W) - pir_exp_rst_adjusied(i)
+     val subnormalShift = subnormalShiftSigned.asUInt
+     val subnormalTruncated = normalizedFraction >> subnormalShift
+     val subnormalGuard = (normalizedFraction >> (subnormalShift - 1.U))(0)
+     val subnormalStickyTerms = (0 until DIV_NORM_FRAC_WIDTH - 1).map { bit =>
+       (subnormalShift > (bit + 1).U) && normalizedFraction(bit)
+     }
+     val subnormalSticky = subnormalStickyTerms.reduce(_ || _)
+     val subnormalRoundUp = subnormalGuard && (subnormalSticky || subnormalTruncated(0))
+     val subnormalRounded = Cat(0.U(1.W), subnormalTruncated(float_frac_width - 1, 0)) + subnormalRoundUp.asUInt
+     val subnormalCarry = subnormalRounded(float_frac_width)
+     val subnormalFraction = Mux(subnormalCarry, 0.U(float_frac_width.W), subnormalRounded(float_frac_width - 1, 0))
+
+     val exponentOnes = ((BigInt(1) << float_exp_width) - 1).U(float_exp_width.W)
+     val zeroExponent = 0.U(float_exp_width.W)
+     val quietNaNFraction = 1.U(float_frac_width.W)
+     val packed = Wire(UInt((1 + float_exp_width + float_frac_width).W))
+     packed := 0.U
+     when(divInputInvalid(i)) {
+       packed := Cat(pir_sign_rst(i), exponentOnes, quietNaNFraction)
+     }.elsewhen(divInputInfinite(i)) {
+       packed := Cat(pir_sign_rst(i), exponentOnes, 0.U(float_frac_width.W))
+     }.elsewhen(divInputZero(i)) {
+       packed := Cat(pir_sign_rst(i), zeroExponent, 0.U(float_frac_width.W))
+     }.elsewhen(pir_exp_rst_adjusied(i) >= FLOAT_MIN_NORMAL_EXP.S(DIV_SCALE_WIDTH.W)) {
+       when(normalRoundedExp > FLOAT_MAX_NORMAL_EXP.S(DIV_SCALE_WIDTH.W)) {
+         packed := Cat(pir_sign_rst(i), exponentOnes, 0.U(float_frac_width.W))
+       }.otherwise {
+         packed := Cat(pir_sign_rst(i), normalExponent(float_exp_width - 1, 0), normalFraction)
+       }
+     }.otherwise {
+       val subnormalExponent = Mux(subnormalCarry, 1.U(float_exp_width.W), zeroExponent)
+       packed := Cat(pir_sign_rst(i), subnormalExponent, subnormalFraction)
+     }
+     div_float_results(i) := packed
+   }
+
 
    // 为所有操作准备Float结果，无论输入是Posit还是Float
    // 这样在任何操作后，都可以根据Outposit信号选择输出格式
@@ -855,7 +965,8 @@
          }.elsewhen(io.op === 3.U) {
            float_rst_data(i).frac := pir_frac_normed(i)(float_frac_width, 0)
          }.elsewhen(io.op === 4.U) {
-           float_rst_data(i).frac := pir_frac_normed(i)(float_frac_width, 0)
+           float_rst_data(i).frac := pir_frac_normed(i)(MAX_POSIT_WIDTH - ES - 3,
+             MAX_POSIT_WIDTH - ES - 3 - float_frac_width)
          }
          
          // 检查特殊情况
@@ -867,12 +978,19 @@
            float_rst_data(i).isZero := true.B
          }
          
-         // 处理特殊情况：当输入是Float且包含NaN或Inf时
-         when(!io.Isposit) {
+         when(io.op === 4.U) {
+           val exponentOverflow = pir_exp_rst_adjusied(i) > FLOAT_MAX_NORMAL_EXP.S(DIV_SCALE_WIDTH.W)
+           val exponentUnderflow = pir_exp_rst_adjusied(i) < FLOAT_MIN_SUBNORMAL_EXP.S(DIV_SCALE_WIDTH.W)
+           val finiteOverflow = !divInputInvalid(i) && !divInputInfinite(i) && !divInputZero(i) && exponentOverflow
+           val finiteUnderflow = !divInputInvalid(i) && !divInputInfinite(i) && !divInputZero(i) && exponentUnderflow
+           float_rst_data(i).isNaN := divInputInvalid(i)
+           float_rst_data(i).isInf := divInputInfinite(i) || finiteOverflow
+           float_rst_data(i).isZero := divInputZero(i) || finiteUnderflow
+         }.elsewhen(!io.Isposit) {
            when(float_data(i).isNaN || float_data2(i).isNaN) {
              float_rst_data(i).isNaN := true.B
            }
-           
+
            when(float_data(i).isInf || float_data2(i).isInf) {
              float_rst_data(i).isInf := true.B
            }
@@ -981,7 +1099,8 @@
      }
      
      // 如果目标精度与源精度相同，直接编码输出
-     when (ACTUAL_DST_POSIT_WIDTH === MAX_POSIT_WIDTH.U) {
+     when (ACTUAL_SRC_POSIT_WIDTH === MAX_POSIT_WIDTH.U &&
+       ACTUAL_DST_POSIT_WIDTH === MAX_POSIT_WIDTH.U) {
        val encode = Module(new PositEncode(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, ES))
        // 初始化所有输入为0
        for(i <- 0 until MAX_VECTOR_SIZE) {
@@ -993,10 +1112,13 @@
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
            encode.io.pir_sign(i) := pir_sign_rst(i)
-           encode.io.pir_exp(i)  := pir_exp_rst_adjusied(i)
+           encode.io.pir_exp(i)  := pir_exp_for_posit(i)
            encode.io.pir_frac(i) := pir_frac_normed(i)
            
-           when(io.op === 4.U) {
+           val isSameWidthP32Divide = io.op === 4.U && io.Isposit &&
+             ACTUAL_SRC_POSIT_WIDTH === MAX_POSIT_WIDTH.U &&
+             ACTUAL_DST_POSIT_WIDTH === MAX_POSIT_WIDTH.U
+           when(isSameWidthP32Divide) {
              posit_results(i) := posit_rst_div(i)
            }.otherwise {
              posit_results(i) := encode.io.posit(i)
@@ -1026,8 +1148,10 @@
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
            result_converter.io.pir_sign1_i(i) := pir_sign_rst(i)
-           result_converter.io.pir_exp1_i(i)  := pir_exp_rst_adjusied(i)
-           result_converter.io.pir_frac1_i(i) := pir_frac_normed(i)
+           result_converter.io.pir_exp1_i(i)  := pir_exp_for_posit(i)
+           val divFractionForConversion =
+             Cat(pir_frac_normed(i)(MAX_POSIT_WIDTH - ES - 3, 1), 0.U(1.W))
+           result_converter.io.pir_frac1_i(i) := Mux(io.op === 4.U, divFractionForConversion, pir_frac_normed(i))
          }
        }
        
@@ -1052,7 +1176,10 @@
            result_encoder.io.pir_exp(i)  := result_converter.io.pir_exp_o(i)
            result_encoder.io.pir_frac(i) := result_converter.io.pir_frac_o(i)
            
-           when(ACTUAL_DST_POSIT_WIDTH > MAX_POSIT_WIDTH.U) {
+           when(io.op === 4.U && io.Isposit &&
+             ACTUAL_SRC_POSIT_WIDTH === 32.U && ACTUAL_DST_POSIT_WIDTH === 16.U) {
+             posit_results(i) := divP32ToP16.io.posit_o(i)
+           }.elsewhen(ACTUAL_DST_POSIT_WIDTH > MAX_POSIT_WIDTH.U) {
              // 目标位宽超过最大位宽，截断
              posit_results(i) := result_encoder.io.posit(i)(MAX_POSIT_WIDTH-1, 0)
            }.elsewhen(ACTUAL_DST_POSIT_WIDTH < MAX_POSIT_WIDTH.U) {
@@ -1104,7 +1231,11 @@
        // 只处理有效范围内的结果
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
-           when(io.Isposit && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR)) {
+           when(io.op === 4.U && (divInputInvalid(i) || divInputInfinite(i))) {
+             io.posit_o(i) := rawPositNaR
+           }.elsewhen(io.op === 4.U && divInputZero(i)) {
+             io.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
+           }.elsewhen(io.Isposit && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR)) {
              io.posit_o(i) := rawPositNaR
            }.otherwise {
              io.posit_o(i) := posit_results(i)
@@ -1117,7 +1248,7 @@
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
            io.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
-           io.float_o(i) := float_results(i)
+           io.float_o(i) := Mux(io.op === 4.U, div_float_results(i), float_results(i))
          }
        }
      }
