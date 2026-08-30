@@ -13,7 +13,7 @@ import chisel3.util._
 class Div(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: Int, val ES: Int, val SCALE_WIDTH: Int) extends Module {
   require(POSIT_WIDTH == 32, "Div implements Posit32 division")
   require(ES == 2, "Div implements Posit32 es=2 division")
-  require(SCALE_WIDTH >= 9, "Div scale must preserve the full Posit32 quotient range")
+  require(SCALE_WIDTH >= 10, "Div scale must preserve the full Posit32 quotient range")
 
   private val FracWidth = POSIT_WIDTH - ES - 3
   private val PirFracWidth = 2 * (FracWidth + 1)

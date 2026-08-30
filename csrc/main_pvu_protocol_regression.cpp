@@ -442,6 +442,145 @@ std::vector<TestCase> build_tests() {
   }
 
   {
+    PvuRequest request = base_request(tag++, 1);
+    request.posit_i1 = {kOne, kNegOne, kTwo, kNegTwo};
+    request.posit_i2 = {kNegOne, kOne, kNegTwo, kTwo};
+    add_posit_case(tests, "op1", "exact-cancellation", request, repeat(0));
+  }
+  {
+    PvuRequest request = base_request(tag++, 1);
+    request.posit_i1 = {kOne, kOne, kNegOne, kNegOne};
+    request.posit_i2 = {kMinPos, 0x00900000u, 0xffffffffu, 0xff700000u};
+    add_posit_case(tests, "op1", "large-exponent-gap-sticky", request,
+                   {kOne, 0x40000001u, kNegOne, 0xbfffffffu});
+  }
+  {
+    PvuRequest request = base_request(tag++, 1);
+    request.posit_i1 = {0x44000000u, 0x44000001u, 0xbc000000u, 0xbbffffffu};
+    request.posit_i2 = {0x00800000u, 0x00800000u, 0xff800000u, 0xff800000u};
+    add_posit_case(tests, "op1", "rne-even-ties", request,
+                   {0x44000000u, 0x44000002u, 0xbc000000u, 0xbbfffffeu});
+  }
+  {
+    PvuRequest request = base_request(tag++, 1);
+    request.posit_i1 = {0x47ffffffu, 0xb8000001u, kMaxPos, kNegMaxPos};
+    request.posit_i2 = {0x00800000u, 0xff800000u, kMaxPos, kNegMaxPos};
+    add_posit_case(tests, "op1", "rounding-carry-and-saturation", request,
+                   {kTwo, kNegTwo, kMaxPos, kNegMaxPos});
+  }
+  {
+    PvuRequest request = base_request(tag++, 1);
+    request.posit_i1 = {0, kNegOne, kNaR, 0};
+    request.posit_i2 = {kOne, 0, 0, kNaR};
+    add_posit_case(tests, "op1", "zero-and-nar", request,
+                   {kOne, kNegOne, kNaR, kNaR});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 2);
+    request.posit_i1 = {kOne, kNegOne, kMaxPos, kMinPos};
+    request.posit_i2 = request.posit_i1;
+    add_posit_case(tests, "op2", "exact-cancellation", request, repeat(0));
+  }
+  {
+    PvuRequest request = base_request(tag++, 2);
+    request.posit_i1 = {kOne, kOne, kNegOne, kNegOne};
+    request.posit_i2 = {kMinPos, 0x00900000u, 0xffffffffu, 0xff700000u};
+    add_posit_case(tests, "op2", "large-exponent-gap-sticky", request,
+                   {kOne, 0x3ffffffeu, kNegOne, 0xc0000002u});
+  }
+  {
+    PvuRequest request = base_request(tag++, 2);
+    request.posit_i1 = {0x44000000u, 0x44000001u, 0xbc000000u, 0xbbffffffu};
+    request.posit_i2 = {0x00800000u, 0x00800000u, 0xff800000u, 0xff800000u};
+    add_posit_case(tests, "op2", "rne-even-ties", request,
+                   {0x44000000u, 0x44000000u, 0xbc000000u, 0xbc000000u});
+  }
+  {
+    PvuRequest request = base_request(tag++, 2);
+    request.posit_i1 = {0x47ffffffu, 0xb8000001u, kMaxPos, kNegMaxPos};
+    request.posit_i2 = {0xff800000u, 0x00800000u, kNegMaxPos, kMaxPos};
+    add_posit_case(tests, "op2", "rounding-carry-and-saturation", request,
+                   {kTwo, kNegTwo, kMaxPos, kNegMaxPos});
+  }
+  {
+    PvuRequest request = base_request(tag++, 2);
+    request.posit_i1 = {0, kNegOne, kNaR, 0};
+    request.posit_i2 = {kOne, 0, 0, kNaR};
+    add_posit_case(tests, "op2", "zero-and-nar", request,
+                   {kNegOne, kNegOne, kNaR, kNaR});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 1);
+    request.is_posit = false;
+    request.out_posit = false;
+    request.float_i = {0x3f800000u, 0x40000000u, 0xbf800000u, 0xc0000000u};
+    request.float_i2 = {0x3f800000u, 0x3f800000u, 0xbf800000u, 0xbf800000u};
+    add_arithmetic_float_case(tests, "float-input-output-route", request,
+                              {0x40000000u, 0x40400000u, 0xc0000000u, 0xc0400000u});
+  }
+  {
+    PvuRequest request = base_request(tag++, 2);
+    request.is_posit = false;
+    request.out_posit = false;
+    request.float_i = {0x40000000u, 0x40800000u, 0xbf800000u, 0xc0000000u};
+    request.float_i2 = {0x3f800000u, 0x40000000u, 0x3f800000u, 0xbf800000u};
+    add_arithmetic_float_case(tests, "float-input-output-route", request,
+                              {0x3f800000u, 0x40000000u, 0xc0000000u, 0xbf800000u});
+  }
+  {
+    PvuRequest request = base_request(tag++, 1);
+    set_p32_to_p16(request);
+    request.posit_i1 = {0x40000001u, 0xbfffffffu, kOne, 0};
+    request.posit_i2 = {0x00800000u, 0xff800000u, kOne, kOne};
+    add_posit_case(tests, "op1-p16", "p32-to-p16-route", request,
+                   {kOne, 0xbfff0000u, kTwo, kOne});
+  }
+  {
+    PvuRequest request = base_request(tag++, 2);
+    set_p32_to_p16(request);
+    request.posit_i1 = {kOne, kNegOne, kTwo, kNegTwo};
+    request.posit_i2 = {0x00900000u, 0xff700000u, kOne, kNegOne};
+    add_posit_case(tests, "op2-p16", "p32-to-p16-route", request,
+                   {0x3fff0000u, kNegOne, kOne, kNegOne});
+  }
+  {
+    PvuRequest request = base_request(tag++, 1);
+    request.src_posit_width = 16;
+    request.dst_posit_width = 32;
+    request.posit_i1 = {0x06b40000u, kOne, kNegOne, kTwo};
+    request.posit_i2 = {0x22440000u, kOne, kNegOne, kNegOne};
+    add_posit_case(tests, "op1-width-route", "src16-to-dst32", request,
+                   {0x22476800u, kTwo, kNegTwo, kOne});
+  }
+  {
+    PvuRequest request = base_request(tag++, 2);
+    request.src_posit_width = 16;
+    request.dst_posit_width = 32;
+    request.posit_i1 = {0x0b290000u, kTwo, kNegOne, kNegTwo};
+    request.posit_i2 = {0x626e0000u, kOne, kOne, kNegOne};
+    add_posit_case(tests, "op2-width-route", "src16-to-dst32", request,
+                   {0x9d920ca4u, kOne, kNegTwo, kNegOne});
+  }
+  {
+    PvuRequest request = base_request(tag++, 1);
+    request.vector_size = 2;
+    request.posit_i1 = {kOne, kNegOne, kNaR, 0x12345678u};
+    request.posit_i2 = {kOne, kNegOne, kNaR, 0x87654321u};
+    add_posit_case(tests, "op1", "inactive-lanes-zero", request,
+                   {kTwo, kNegTwo, 0, 0});
+  }
+  {
+    PvuRequest request = base_request(tag++, 2);
+    request.vector_size = 2;
+    request.posit_i1 = {kTwo, kNegTwo, kNaR, 0x12345678u};
+    request.posit_i2 = {kOne, kNegOne, kNaR, 0x87654321u};
+    add_posit_case(tests, "op2", "inactive-lanes-zero", request,
+                   {kOne, kNegOne, 0, 0});
+  }
+
+  {
     PvuRequest request = base_request(tag++, 4);
     request.posit_i1 = {0, 0, kOne, kNaR};
     request.posit_i2 = {0, kOne, 0, kOne};
