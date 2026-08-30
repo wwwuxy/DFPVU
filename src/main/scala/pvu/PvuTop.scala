@@ -249,6 +249,9 @@
    
    val rawPositNaR = (BigInt(1) << (MAX_POSIT_WIDTH - 1)).U(MAX_POSIT_WIDTH.W)
    val divUsesRawP32 = io.Isposit && ACTUAL_SRC_POSIT_WIDTH === 32.U
+   val addSubUsesRawP32 = io.Isposit && io.Outposit &&
+     (io.op === 1.U || io.op === 2.U) && ACTUAL_SRC_POSIT_WIDTH === 32.U &&
+     ACTUAL_DST_POSIT_WIDTH === 32.U
    val dotHasRawPositNaR = (0 until MAX_VECTOR_SIZE)
      .map(i => valid_range(i) && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR))
      .reduce(_ || _)
@@ -340,6 +343,16 @@
    p32ToP16.io.posit_i := io.posit_i1
    val divP32ToP16 = Module(new Posit32ToPosit16(MAX_VECTOR_SIZE))
    divP32ToP16.io.posit_i := posit_rst_div
+   val rawAddSub = Module(new PositAddSub(MAX_VECTOR_SIZE, SRC_EXP_WIDTH_MAX))
+   rawAddSub.io.posit1_i := io.posit_i1
+   rawAddSub.io.posit2_i := io.posit_i2
+   rawAddSub.io.subtract_i := io.op === 2.U
+   for(i <- 0 until MAX_VECTOR_SIZE) {
+     rawAddSub.io.pir_exp1_i(i) := pir_exp(i)
+     rawAddSub.io.pir_exp2_i(i) := pir_exp2(i)
+     rawAddSub.io.pir_frac1_i(i) := pir_frac(i)(MAX_POSIT_WIDTH - ES - 3, 0)
+     rawAddSub.io.pir_frac2_i(i) := pir_frac2(i)(MAX_POSIT_WIDTH - ES - 3, 0)
+   }
 
    // For dot product, output is scalar.
    val pir_sign_dot = Wire(UInt(1.W))
@@ -1237,7 +1250,9 @@
        // 只处理有效范围内的结果
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
-           when(io.op === 4.U && (divInputInvalid(i) || divInputInfinite(i))) {
+           when(addSubUsesRawP32) {
+             io.posit_o(i) := rawAddSub.io.posit_o(i)
+           }.elsewhen(io.op === 4.U && (divInputInvalid(i) || divInputInfinite(i))) {
              io.posit_o(i) := rawPositNaR
            }.elsewhen(io.op === 4.U && divInputZero(i)) {
              io.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
