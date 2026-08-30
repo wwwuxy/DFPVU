@@ -525,6 +525,17 @@ std::vector<TestCase> build_tests() {
     request.out_posit = false;
     request.float_to_posit = false;
     request.float_mode = 3;
+    request.posit_i1 = {kNaR, kOne, 0, kOne};
+    request.posit_i2 = {kOne, 0, 0, kNaR};
+    add_arithmetic_float_case(tests, "posit-input-invalid-canonical-positive-nan", request,
+                              {0x7f800001u, 0x7f800001u, 0x7f800001u, 0x7f800001u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.out_posit = false;
+    request.float_to_posit = false;
+    request.float_mode = 3;
     request.posit_i1 = {kMinPos, kMinPos, kOne, kNegOne};
     request.posit_i2 = {0x70000000u, 0x6c000000u, 0x4c000000u, 0x4c000000u};
     add_arithmetic_float_case(tests, "posit-input-float-subnormal-and-rne", request,
@@ -547,6 +558,30 @@ std::vector<TestCase> build_tests() {
 
   {
     PvuRequest request = base_request(tag++, 4);
+    request.is_posit = false;
+    request.out_posit = false;
+    request.float_to_posit = false;
+    request.float_mode = 3;
+    request.float_i = {0x7f7fffffu, 0xff7fffffu, 0x00000001u, 0x80000001u};
+    request.float_i2 = {0x00000001u, 0x00000001u, 0x7f7fffffu, 0x7f7fffffu};
+    add_arithmetic_float_case(tests, "float-input-tenth-scale-bit", request,
+                              {0x7f800000u, 0xff800000u, 0x00000000u, 0x80000000u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.is_posit = false;
+    request.out_posit = false;
+    request.float_to_posit = false;
+    request.float_mode = 3;
+    request.float_i = {0x00000005u, 0x00000003u, 0x00800000u, 0x00ffffffu};
+    request.float_i2 = {0x40000000u, 0x40000000u, 0x40400000u, 0x40000000u};
+    add_arithmetic_float_case(tests, "float-input-subnormal-grs-rne", request,
+                              {0x00000002u, 0x00000002u, 0x002aaaabu, 0x00800000u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
     request.dst_posit_width = 16;
     request.posit_i1 = {kOne, kNegOne, kOne, kOne};
     request.posit_i2 = {0x4c000000u, 0x4c000000u, kTwo, 0};
@@ -562,6 +597,16 @@ std::vector<TestCase> build_tests() {
     request.posit_i2 = {0x4c000000u, 0x4c000000u, kTwo, 0};
     add_posit_case(tests, "op4-width-route", "nondefault-source-must-not-select-raw-p32",
                    request, {0x32aaaaaau, 0xcd555556u, kHalf, kNaR});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.src_posit_width = 16;
+    request.dst_posit_width = 32;
+    request.posit_i1 = {kMaxPos, kNaR, kOne, kNegOne};
+    request.posit_i2 = {kOne, kOne, kNegTwo, kTwo};
+    add_posit_case(tests, "op4-width-route", "src16-decoded-maxpos-nar-and-sign", request,
+                   {kOne, kNaR, kNegHalf, kNegHalf});
   }
 
   for (uint8_t op : {uint8_t{8}, uint8_t{9}}) {
