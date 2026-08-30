@@ -25,6 +25,7 @@ class Div(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: Int, val 
 
   val io = IO(new Bundle {
     val is_posit_i = Input(Bool())
+    val use_raw_p32_i = Input(Bool())
     val posit1_i = Input(Vec(VECTOR_SIZE, UInt(POSIT_WIDTH.W)))
     val posit2_i = Input(Vec(VECTOR_SIZE, UInt(POSIT_WIDTH.W)))
     val pir_sign1_i = Input(Vec(VECTOR_SIZE, UInt(1.W)))
@@ -48,23 +49,26 @@ class Div(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: Int, val 
 
 
   for (lane <- 0 until VECTOR_SIZE) {
-    val rawA = Mux(io.is_posit_i, io.posit1_i(lane), 0.U(POSIT_WIDTH.W))
-    val rawB = Mux(io.is_posit_i, io.posit2_i(lane), 0.U(POSIT_WIDTH.W))
+    val rawA = Mux(io.use_raw_p32_i, io.posit1_i(lane), 0.U(POSIT_WIDTH.W))
+    val rawB = Mux(io.use_raw_p32_i, io.posit2_i(lane), 0.U(POSIT_WIDTH.W))
     val fracA = io.pir_frac1_i(lane)
     val fracB = io.pir_frac2_i(lane)
     val magnitudeA = Mux(rawA(POSIT_WIDTH - 1).asBool, (~rawA).asUInt + 1.U, rawA)
     val magnitudeB = Mux(rawB(POSIT_WIDTH - 1).asBool, (~rawB).asUInt + 1.U, rawB)
     val scaleA = Wire(SInt(SCALE_WIDTH.W))
     val scaleB = Wire(SInt(SCALE_WIDTH.W))
-    scaleA := Mux(io.is_posit_i && magnitudeA === maxpos, 120.S, io.pir_exp1_i(lane))
-    scaleB := Mux(io.is_posit_i && magnitudeB === maxpos, 120.S, io.pir_exp2_i(lane))
+    scaleA := Mux(io.use_raw_p32_i && magnitudeA === maxpos, 120.S, io.pir_exp1_i(lane))
+    scaleB := Mux(io.use_raw_p32_i && magnitudeB === maxpos, 120.S, io.pir_exp2_i(lane))
     val rawInvalid = rawA === positNaR || rawB === positNaR || rawB === 0.U
-    val pirInvalid = fracB === 0.U
-    val isInvalid = Mux(io.is_posit_i, rawInvalid, pirInvalid)
-    val isZero = Mux(io.is_posit_i, rawA === 0.U, fracA === 0.U && fracB =/= 0.U)
+    val decodedPositInvalid =
+      (fracA === 0.U && io.pir_sign1_i(lane) === 1.U) || fracB === 0.U
+    val pirInvalid = Mux(io.is_posit_i, decodedPositInvalid, fracB === 0.U)
+    val isInvalid = Mux(io.use_raw_p32_i, rawInvalid, pirInvalid)
+    val decodedZero = fracA === 0.U && io.pir_sign1_i(lane) === 0.U && fracB =/= 0.U
+    val isZero = Mux(io.use_raw_p32_i, rawA === 0.U, decodedZero)
     val rawSign = rawA(POSIT_WIDTH - 1) ^ rawB(POSIT_WIDTH - 1)
     val pirSign = io.pir_sign1_i(lane) ^ io.pir_sign2_i(lane)
-    val sign = Mux(io.is_posit_i, rawSign, pirSign)
+    val sign = Mux(io.use_raw_p32_i, rawSign, pirSign)
 
     // A/B is in [0.5, 2). Shift A once when needed so the quotient is
     // normalized to [1, 2), and compensate that normalization in the scale.

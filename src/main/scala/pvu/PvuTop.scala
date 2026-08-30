@@ -248,6 +248,7 @@
    }
    
    val rawPositNaR = (BigInt(1) << (MAX_POSIT_WIDTH - 1)).U(MAX_POSIT_WIDTH.W)
+   val divUsesRawP32 = io.Isposit && ACTUAL_SRC_POSIT_WIDTH === 32.U
    val dotHasRawPositNaR = (0 until MAX_VECTOR_SIZE)
      .map(i => valid_range(i) && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR))
      .reduce(_ || _)
@@ -257,15 +258,19 @@
    for (i <- 0 until MAX_VECTOR_SIZE) {
      val rawInvalid = io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR || io.posit_i2(i) === 0.U
      val rawZero = !rawInvalid && io.posit_i1(i) === 0.U
+     val decodedPositInvalid =
+       (pir_frac(i) === 0.U && pir_sign(i) === 1.U) || pir_frac2(i) === 0.U
+     val decodedPositZero = !decodedPositInvalid && pir_frac(i) === 0.U
      val floatInvalid = float_data(i).isNaN || float_data2(i).isNaN ||
        (float_data(i).isInf && float_data2(i).isInf) || (float_data(i).isZero && float_data2(i).isZero)
      val floatInfinite = !floatInvalid && ((float_data(i).isInf && !float_data2(i).isInf) ||
        (!float_data(i).isInf && !float_data(i).isZero && float_data2(i).isZero))
      val floatZero = !floatInvalid && ((float_data(i).isZero && !float_data2(i).isZero) ||
        (!float_data(i).isInf && float_data2(i).isInf))
-     divInputInvalid(i) := Mux(io.Isposit, rawInvalid, floatInvalid)
+     divInputInvalid(i) := Mux(divUsesRawP32, rawInvalid,
+       Mux(io.Isposit, decodedPositInvalid, floatInvalid))
      divInputInfinite(i) := !io.Isposit && floatInfinite
-     divInputZero(i) := Mux(io.Isposit, rawZero, floatZero)
+     divInputZero(i) := Mux(divUsesRawP32, rawZero, Mux(io.Isposit, decodedPositZero, floatZero))
    }
 
 
@@ -446,6 +451,7 @@
 
      div_inst.io.posit1_i    := io.posit_i1
      div_inst.io.is_posit_i   := io.Isposit
+     div_inst.io.use_raw_p32_i := divUsesRawP32
      div_inst.io.pir_sign1_i  := pir_sign
      div_inst.io.pir_sign2_i  := pir_sign2
      div_inst.io.posit2_i    := io.posit_i2
@@ -898,11 +904,11 @@
 
      val exponentOnes = ((BigInt(1) << float_exp_width) - 1).U(float_exp_width.W)
      val zeroExponent = 0.U(float_exp_width.W)
-     val quietNaNFraction = 1.U(float_frac_width.W)
+     val canonicalNaNFraction = 1.U(float_frac_width.W)
      val packed = Wire(UInt((1 + float_exp_width + float_frac_width).W))
      packed := 0.U
      when(divInputInvalid(i)) {
-       packed := Cat(pir_sign_rst(i), exponentOnes, quietNaNFraction)
+       packed := Cat(0.U(1.W), exponentOnes, canonicalNaNFraction)
      }.elsewhen(divInputInfinite(i)) {
        packed := Cat(pir_sign_rst(i), exponentOnes, 0.U(float_frac_width.W))
      }.elsewhen(divInputZero(i)) {
