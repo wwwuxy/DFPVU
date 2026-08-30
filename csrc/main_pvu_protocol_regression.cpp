@@ -376,6 +376,17 @@ void add_float_case(std::vector<TestCase>& tests, uint8_t mode, const std::strin
                    ResultKind::kFloatVector});
 }
 
+void add_arithmetic_float_case(std::vector<TestCase>& tests, const std::string& category,
+                               PvuRequest request,
+                               std::array<uint64_t, kLanes> expected_float) {
+  PvuResponse expected{};
+  expected.tag = request.tag;
+  expected.op = request.op;
+  expected.floating = expected_float;
+  tests.push_back({"op" + std::to_string(request.op) + "-float", category, request, expected,
+                   ResultKind::kFloatVector});
+}
+
 void add_float_to_posit_case(std::vector<TestCase>& tests, uint8_t mode,
                              const std::string& category, PvuRequest request,
                              std::array<uint32_t, kLanes> expected_posit) {
@@ -448,10 +459,109 @@ std::vector<TestCase> build_tests() {
 
   {
     PvuRequest request = base_request(tag++, 4);
+    request.src_posit_width = 0;
+    request.dst_posit_width = 0;
     request.posit_i1 = {kMaxPos, kMinPos, kMinPos, kMaxPos};
     request.posit_i2 = {kFour, kQuarter, kFour, kMinPos};
     add_posit_case(tests, "op4", "rne-even-ties-and-saturation", request,
                    {0x7ffffffeu, 0x00000002u, kMinPos, kMaxPos});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.is_posit = false;
+    request.out_posit = false;
+    request.float_to_posit = false;
+    request.float_mode = 3;
+    request.posit_i1 = {kNaR, kNegOne, 0, kMaxPos};
+    request.posit_i2 = {0, kNaR, kNegOne, 0};
+    request.float_i = {0x41000000u, 0xc1000000u, 0x3fc00000u, 0x3f800000u};
+    request.float_i2 = {0x40000000u, 0x40000000u, 0xbf000000u, 0x40000000u};
+    add_arithmetic_float_case(tests, "float-input-finite-and-signs", request,
+                              {0x40800000u, 0xc0800000u, 0xc0400000u, 0x3f000000u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.is_posit = false;
+    request.out_posit = false;
+    request.float_to_posit = false;
+    request.float_mode = 3;
+    request.posit_i1 = {kOne, 0, kNaR, kNegOne};
+    request.posit_i2 = {kNaR, kOne, 0, kMaxPos};
+    request.float_i = {0x00000000u, 0xbf800000u, 0x7f800000u, 0xbf800000u};
+    request.float_i2 = {0x00000000u, 0x00000000u, 0x7f800000u, 0x7f800000u};
+    add_arithmetic_float_case(tests, "float-input-special-values", request,
+                              {0x7f800001u, 0xff800000u, 0x7f800001u, 0x80000000u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.is_posit = false;
+    request.out_posit = true;
+    request.float_to_posit = true;
+    request.float_mode = 3;
+    request.posit_i1 = {kNaR, kNegOne, 0, kMaxPos};
+    request.posit_i2 = {0, kNaR, kNegOne, 0};
+    request.float_i = {0x41000000u, 0xc1000000u, 0x3fc00000u, 0x3f800000u};
+    request.float_i2 = {0x40000000u, 0x40000000u, 0xbf000000u, 0x40000000u};
+    add_posit_case(tests, "op4-float-to-posit", "float-input-default-posit-output", request,
+                   {kFour, 0xb0000000u, 0xb4000000u, kHalf});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.out_posit = false;
+    request.float_to_posit = false;
+    request.float_mode = 3;
+    request.posit_i1 = {kOne, kNegOne, kMaxPos, kMinPos};
+    request.posit_i2 = {kTwo, kTwo, kMinPos, kMaxPos};
+    add_arithmetic_float_case(tests, "posit-input-float-output-scale-range", request,
+                              {0x3f000000u, 0xbf000000u, 0x7f800000u, 0x00000000u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.out_posit = false;
+    request.float_to_posit = false;
+    request.float_mode = 3;
+    request.posit_i1 = {kMinPos, kMinPos, kOne, kNegOne};
+    request.posit_i2 = {0x70000000u, 0x6c000000u, 0x4c000000u, 0x4c000000u};
+    add_arithmetic_float_case(tests, "posit-input-float-subnormal-and-rne", request,
+                              {0x00200000u, 0x00400000u, 0x3eaaaaabu, 0xbeaaaaabu});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.is_posit = false;
+    request.out_posit = false;
+    request.float_to_posit = false;
+    request.float_mode = 3;
+    request.posit_i1 = {kNaR, kMinPos, 0, kMaxPos};
+    request.posit_i2 = {0, kNaR, kOne, 0};
+    request.float_i = {0x00000001u, 0x3f800000u, 0x00400000u, 0x00800000u};
+    request.float_i2 = {0x3f800000u, 0x00000001u, 0x40000000u, 0x40000000u};
+    add_arithmetic_float_case(tests, "float-input-subnormal-operands", request,
+                              {0x00000001u, 0x7f800000u, 0x00200000u, 0x00400000u});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.dst_posit_width = 16;
+    request.posit_i1 = {kOne, kNegOne, kOne, kOne};
+    request.posit_i2 = {0x4c000000u, 0x4c000000u, kTwo, 0};
+    add_posit_case(tests, "op4-p16", "nondefault-posit-output", request,
+                   {0x32ab0000u, 0xcd550000u, kHalf, kNaR});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 4);
+    request.src_posit_width = 16;
+    request.dst_posit_width = 32;
+    request.posit_i1 = {kOne, kNegOne, kOne, kOne};
+    request.posit_i2 = {0x4c000000u, 0x4c000000u, kTwo, 0};
+    add_posit_case(tests, "op4-width-route", "nondefault-source-must-not-select-raw-p32",
+                   request, {0x32aaaaaau, 0xcd555556u, kHalf, kNaR});
   }
 
   for (uint8_t op : {uint8_t{8}, uint8_t{9}}) {

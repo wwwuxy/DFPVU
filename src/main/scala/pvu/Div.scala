@@ -10,30 +10,31 @@ import chisel3.util._
   * quotient so discarded quotient bits and the integer remainder participate
   * in one final RNE-even decision.
   */
-class Div(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: Int, val ES: Int) extends Module {
+class Div(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: Int, val ES: Int, val SCALE_WIDTH: Int) extends Module {
   require(POSIT_WIDTH == 32, "Div implements Posit32 division")
   require(ES == 2, "Div implements Posit32 es=2 division")
+  require(SCALE_WIDTH >= 9, "Div scale must preserve the full Posit32 quotient range")
 
-  private val Nd = log2Ceil(POSIT_WIDTH - 1)
-  private val ExpWidth = Nd + ES + 1
   private val FracWidth = POSIT_WIDTH - ES - 3
   private val PirFracWidth = 2 * (FracWidth + 1)
   private val QuotientFractionBits = PirFracWidth - 1
   private val RawFractionBits = POSIT_WIDTH - ES - 3
   private val PositPayloadBits = POSIT_WIDTH - 1
   private val TailBits = ES + RawFractionBits + 2
-  private val ScaleWidth = 10
   private val RegimeCountWidth = 7
 
   val io = IO(new Bundle {
+    val is_posit_i = Input(Bool())
     val posit1_i = Input(Vec(VECTOR_SIZE, UInt(POSIT_WIDTH.W)))
     val posit2_i = Input(Vec(VECTOR_SIZE, UInt(POSIT_WIDTH.W)))
-    val pir_exp1_i = Input(Vec(VECTOR_SIZE, SInt(ExpWidth.W)))
-    val pir_exp2_i = Input(Vec(VECTOR_SIZE, SInt(ExpWidth.W)))
+    val pir_sign1_i = Input(Vec(VECTOR_SIZE, UInt(1.W)))
+    val pir_sign2_i = Input(Vec(VECTOR_SIZE, UInt(1.W)))
+    val pir_exp1_i = Input(Vec(VECTOR_SIZE, SInt(SCALE_WIDTH.W)))
+    val pir_exp2_i = Input(Vec(VECTOR_SIZE, SInt(SCALE_WIDTH.W)))
     val pir_frac1_i = Input(Vec(VECTOR_SIZE, UInt((FracWidth + 1).W)))
     val pir_frac2_i = Input(Vec(VECTOR_SIZE, UInt((FracWidth + 1).W)))
     val pir_sign_o = Output(Vec(VECTOR_SIZE, UInt(1.W)))
-    val pir_exp_o = Output(Vec(VECTOR_SIZE, SInt(ExpWidth.W)))
+    val pir_exp_o = Output(Vec(VECTOR_SIZE, SInt(SCALE_WIDTH.W)))
     val pir_frac_o = Output(Vec(VECTOR_SIZE, UInt(PirFracWidth.W)))
     val posit_o = Output(Vec(VECTOR_SIZE, UInt(POSIT_WIDTH.W)))
   })
@@ -47,26 +48,30 @@ class Div(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: Int, val 
 
 
   for (lane <- 0 until VECTOR_SIZE) {
-    val rawA = io.posit1_i(lane)
-    val rawB = io.posit2_i(lane)
+    val rawA = Mux(io.is_posit_i, io.posit1_i(lane), 0.U(POSIT_WIDTH.W))
+    val rawB = Mux(io.is_posit_i, io.posit2_i(lane), 0.U(POSIT_WIDTH.W))
     val fracA = io.pir_frac1_i(lane)
     val fracB = io.pir_frac2_i(lane)
     val magnitudeA = Mux(rawA(POSIT_WIDTH - 1).asBool, (~rawA).asUInt + 1.U, rawA)
     val magnitudeB = Mux(rawB(POSIT_WIDTH - 1).asBool, (~rawB).asUInt + 1.U, rawB)
-    val scaleA = Wire(SInt(ScaleWidth.W))
-    val scaleB = Wire(SInt(ScaleWidth.W))
-    scaleA := Mux(magnitudeA === maxpos, 120.S, io.pir_exp1_i(lane).pad(ScaleWidth))
-    scaleB := Mux(magnitudeB === maxpos, 120.S, io.pir_exp2_i(lane).pad(ScaleWidth))
-    val isInvalid = rawA === positNaR || rawB === positNaR || rawB === 0.U
-    val isZero = rawA === 0.U
-    val sign = rawA(POSIT_WIDTH - 1) ^ rawB(POSIT_WIDTH - 1)
+    val scaleA = Wire(SInt(SCALE_WIDTH.W))
+    val scaleB = Wire(SInt(SCALE_WIDTH.W))
+    scaleA := Mux(io.is_posit_i && magnitudeA === maxpos, 120.S, io.pir_exp1_i(lane))
+    scaleB := Mux(io.is_posit_i && magnitudeB === maxpos, 120.S, io.pir_exp2_i(lane))
+    val rawInvalid = rawA === positNaR || rawB === positNaR || rawB === 0.U
+    val pirInvalid = fracB === 0.U
+    val isInvalid = Mux(io.is_posit_i, rawInvalid, pirInvalid)
+    val isZero = Mux(io.is_posit_i, rawA === 0.U, fracA === 0.U && fracB =/= 0.U)
+    val rawSign = rawA(POSIT_WIDTH - 1) ^ rawB(POSIT_WIDTH - 1)
+    val pirSign = io.pir_sign1_i(lane) ^ io.pir_sign2_i(lane)
+    val sign = Mux(io.is_posit_i, rawSign, pirSign)
 
     // A/B is in [0.5, 2). Shift A once when needed so the quotient is
     // normalized to [1, 2), and compensate that normalization in the scale.
     val normalizeLeft = fracA < fracB
     val normalizedNumerator = Mux(normalizeLeft,
       Cat(fracA, 0.U(1.W)), Cat(0.U(1.W), fracA))
-    val scale = Wire(SInt(ScaleWidth.W))
+    val scale = Wire(SInt(SCALE_WIDTH.W))
     scale := scaleA - scaleB - normalizeLeft.asUInt.zext
 
     // Keep a hidden bit plus 55 quotient fraction bits. The remainder is not
@@ -80,7 +85,7 @@ class Div(val POSIT_WIDTH: Int, val VECTOR_SIZE: Int, val ALIGN_WIDTH: Int, val 
     val pirSticky = quotient(0) || quotientHasMore
     val pirQuotient = Cat(quotient(PirFracWidth - 1, 1), pirSticky)
 
-    io.pir_sign_o(lane) := Mux(isInvalid, 1.U, Mux(isZero, 0.U, sign))
+    io.pir_sign_o(lane) := Mux(io.is_posit_i && isZero, 0.U, sign)
     io.pir_exp_o(lane) := Mux(isInvalid || isZero, 0.S, scale)
     io.pir_frac_o(lane) := Mux(isInvalid || isZero, 0.U, pirQuotient)
 
