@@ -3,8 +3,10 @@
 
 #include <verilated.h>
 #include <verilated_vcd_c.h>
+#include <cstdlib>
 #include <iostream>
 #include "VPvuTop.h"       // 由 Verilator 生成
+#include "pvu_protocol_driver.h"
 #include "VPvuTop__Syms.h" // 由 Verilator 生成
 
 #if 1
@@ -16,6 +18,10 @@ void check_outputs(VPvuTop* dut,
                    const uint32_t expected_o[4])
 {
     bool pass = true;
+    if (!(dut->io_out_valid && dut->io_out_ready)) {
+        std::cerr << "response was not completed before sampling\n";
+        std::exit(1);
+    }
 
     uint32_t actual_o[4] = {
         static_cast<uint32_t>(dut->io_posit_o_0),
@@ -43,6 +49,10 @@ void check_outputs(VPvuTop* dut,
 void check_outputs_dot(VPvuTop* dut, uint32_t expected_o)
 {
     bool pass = true;
+    if (!(dut->io_out_valid && dut->io_out_ready)) {
+        std::cerr << "response was not completed before sampling\n";
+        std::exit(1);
+    }
 
     // 读取实际输出
     uint32_t actual_o     = static_cast<uint32_t>(dut->io_posit_dot_o);
@@ -125,6 +135,13 @@ void toggle_clock(VPvuTop* dut, VerilatedVcdC* tfp, vluint64_t &main_time) {
     dut->clock = 0;
     dut->eval();
     if (tfp) tfp->dump(main_time++);
+}
+
+void complete_transaction(VPvuTop* dut, VerilatedVcdC* tfp, vluint64_t& main_time) {
+    pvu_wait_until_request_ready(dut);
+    toggle_clock(dut, tfp, main_time);
+    dut->io_in_valid = 0;
+    pvu_wait_until_response_valid(dut);
 }
 
 //-----------------------------
@@ -237,9 +254,7 @@ int main(int argc, char** argv) {
         uint32_t expected_o  = 0x63000000; 
 
         set_inputs(dut, test_i1, test_i2, test_op);
-        for (int cycle = 0; cycle < 2; ++cycle) {
-            toggle_clock(dut, tfp, main_time);
-        }
+        complete_transaction(dut, tfp, main_time);
         check_outputs_dot(dut, expected_o);
     }
 
@@ -260,6 +275,10 @@ int main(int argc, char** argv) {
 void check_outputs(VPvuTop* dut, uint32_t expected_o)
 {
     bool pass = true;
+    if (!(dut->io_out_valid && dut->io_out_ready)) {
+        std::cerr << "response was not completed before sampling\n";
+        std::exit(1);
+    }
 
     // 读取实际输出
     uint32_t actual_o     = static_cast<uint32_t>(dut->io_posit_o_0);
@@ -282,6 +301,10 @@ void check_outputs(VPvuTop* dut, uint32_t expected_o)
 void check_outputs_dot(VPvuTop* dut, uint32_t expected_o)
 {
     bool pass = true;
+    if (!(dut->io_out_valid && dut->io_out_ready)) {
+        std::cerr << "response was not completed before sampling\n";
+        std::exit(1);
+    }
 
     // 读取实际输出
     uint32_t actual_o     = static_cast<uint32_t>(dut->io_posit_dot_o);
