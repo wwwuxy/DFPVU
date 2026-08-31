@@ -276,31 +276,33 @@ class ProtocolDriver {
     dut_->eval();
   }
 
-  PvuResponse recv() {
-    wait_for_response();
-    dut_->io_out_ready = 1;
+  void present(const PvuRequest& request) {
+    drive(request);
+    dut_->io_in_valid = 1;
     dut_->eval();
-    const PvuResponse response = sample();
-    tick();
-    dut_->io_out_ready = 0;
-    dut_->eval();
-    return response;
   }
 
-  void assert_stable_while_stalled(const PvuRequest& unrelated_request) {
-    wait_for_response();
-    dut_->io_out_ready = 0;
-    const PvuResponse held = sample();
-    drive(unrelated_request);
-    dut_->io_in_valid = 1;
-    for (size_t cycle = 0; cycle < 3; ++cycle) {
-      if (in_ready()) throw std::runtime_error("in_ready asserted while one response is stalled");
-      if (!same_response(held, sample())) {
-        throw std::runtime_error("response changed while out_valid && !out_ready");
-      }
-      tick();
-    }
+  void withdraw_request() {
     dut_->io_in_valid = 0;
+    dut_->eval();
+  }
+
+  void set_out_ready(bool ready) {
+    dut_->io_out_ready = ready ? 1 : 0;
+    dut_->eval();
+  }
+
+  void advance() { tick(); }
+
+  PvuResponse response() const { return sample(); }
+
+  PvuResponse recv() {
+    wait_for_response();
+    set_out_ready(true);
+    const PvuResponse completed = sample();
+    tick();
+    set_out_ready(false);
+    return completed;
   }
 
  private:
@@ -356,6 +358,7 @@ class ProtocolDriver {
     return response;
   }
 
+ public:
   static bool same_response(const PvuResponse& lhs, const PvuResponse& rhs) {
     return lhs.tag == rhs.tag && lhs.op == rhs.op && lhs.posit == rhs.posit &&
       lhs.posit_dot == rhs.posit_dot && lhs.floating == rhs.floating &&
@@ -1259,6 +1262,64 @@ bool matches(const TestCase& test, const PvuResponse& actual, std::string& reaso
   return true;
 }
 
+bool run_backpressure_pop_push(ProtocolDriver& adapter, const TestCase& a, const TestCase& b) {
+  std::array<const TestCase*, 2> scoreboard{};
+  size_t head = 0;
+  size_t tail = 0;
+  auto enqueue = [&](const TestCase& test) { scoreboard.at(tail++) = &test; };
+  auto expect_front = [&](const char* phase) {
+    if (head == tail) throw std::runtime_error(std::string("empty scoreboard at ") + phase);
+    if (!adapter.out_valid()) throw std::runtime_error(std::string("out_valid dropped at ") + phase);
+    std::string reason;
+    if (!matches(*scoreboard.at(head), adapter.response(), reason)) {
+      throw std::runtime_error(std::string("scoreboard mismatch at ") + phase + ": " + reason);
+    }
+  };
+
+  adapter.set_out_ready(false);
+  adapter.present(a.request);
+  if (!adapter.in_ready()) throw std::runtime_error("A was not accepted into an empty response buffer");
+  enqueue(a);
+  adapter.advance();
+  adapter.withdraw_request();
+  expect_front("A response creation");
+  const PvuResponse held_a = adapter.response();
+
+  // Present B with a distinct tag while A is stalled.  B must remain valid
+  // until the exact edge that consumes A and accepts B into the one slot.
+  adapter.present(b.request);
+  for (size_t cycle = 0; cycle < 3; ++cycle) {
+    if (!adapter.out_valid()) throw std::runtime_error("out_valid was not continuous during backpressure");
+    if (adapter.in_ready()) throw std::runtime_error("B observed in_ready while A occupied the response slot");
+    if (!ProtocolDriver::same_response(held_a, adapter.response())) {
+      throw std::runtime_error("A payload/tag/op changed while out_valid && !out_ready");
+    }
+    adapter.advance();
+  }
+
+  adapter.set_out_ready(true);
+  if (!adapter.out_valid() || !adapter.in_ready()) {
+    throw std::runtime_error("one-slot buffer did not expose same-cycle pop/push readiness");
+  }
+  expect_front("A pop/B push edge");
+  ++head;
+  enqueue(b);
+  adapter.advance();
+  adapter.withdraw_request();
+  adapter.set_out_ready(false);
+  expect_front("B response creation");
+
+  adapter.set_out_ready(true);
+  expect_front("B completion");
+  ++head;
+  adapter.advance();
+  adapter.set_out_ready(false);
+  if (head != tail || adapter.out_valid()) {
+    throw std::runtime_error("scoreboard did not drain in A-to-B order");
+  }
+  return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1269,17 +1330,12 @@ int main(int argc, char** argv) {
   const std::vector<TestCase> tests = build_tests();
   std::map<std::string, std::pair<size_t, size_t>> summary;
   size_t mismatches = 0;
+  run_backpressure_pop_push(adapter, tests.at(0), tests.at(1));
 
   for (const TestCase& test : tests) {
     if (!adapter.in_ready()) throw std::runtime_error("input valid/ready handshake blocked by pending response");
     adapter.send(test.request);
     if (!adapter.out_valid()) throw std::runtime_error("accepted request produced no response valid");
-    // A disconnected request must not affect a stalled response.  The buffer
-    // must also deassert in_ready until the held response handshakes.
-    PvuRequest unrelated = base_request(test.request.tag ^ 0xa5a5u, 3);
-    unrelated.posit_i1 = repeat(kFour);
-    unrelated.posit_i2 = repeat(kNegHalf);
-    adapter.assert_stable_while_stalled(unrelated);
     const PvuResponse actual = adapter.recv();
     ++summary[test.operation].first;
     std::string reason;

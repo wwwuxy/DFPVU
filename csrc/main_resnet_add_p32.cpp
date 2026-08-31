@@ -8,6 +8,7 @@
 #include <cmath>
 #include <iostream>
 #include "VPvuTop.h"
+#include "pvu_protocol_driver.h"
 #include "../../SoftPosit/source/include/softposit.h"
 
 //---------------- 配置参数 -------------------
@@ -115,7 +116,7 @@ int main(int argc, char** argv) {
         tfp->dump(i);  // 转储波形数据
     }
     top->reset = 0;
-    top->io_in_valid = 1;
+    top->io_in_valid = 0;
     top->io_out_ready = 1;
     top->io_in_tag = 0;
 
@@ -166,6 +167,9 @@ int main(int argc, char** argv) {
 
 
         // 运行一次计算
+        top->io_in_tag = i;
+        top->io_in_valid = 1;
+        pvu_wait_until_request_ready(top);
         top->clock = 1;
         top->eval();
         tfp->dump(i*2 + 1);  // 转储波形数据
@@ -174,7 +178,13 @@ int main(int argc, char** argv) {
         top->eval();
         tfp->dump(i*2 + 2);  // 转储波形数据
 
+        top->io_in_valid = 0;
+        pvu_wait_until_response_valid(top);
         // 结果比较
+        if (!(top->io_out_valid && top->io_out_ready)) {
+            std::cerr << "response was not completed before sampling\n";
+            return 1;
+        }
         uint32_t hw_result[4] = {0};
         hw_result[0] = top->io_posit_o_0;
         hw_result[1] = top->io_posit_o_1;
