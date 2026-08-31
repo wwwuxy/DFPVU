@@ -115,6 +115,9 @@ int main(int argc, char** argv) {
         tfp->dump(i);  // 转储波形数据
     }
     top->reset = 0;
+    top->io_in_valid = 1;
+    top->io_out_ready = 1;
+    top->io_in_tag = 0;
 
     size_t errors = 0;
     const size_t total = SAMPLE_NUM;

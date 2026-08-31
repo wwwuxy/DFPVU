@@ -107,6 +107,9 @@ void set_inputs(
     dut->io_src_posit_width = 32;
     dut->io_dst_posit_width = 32;
     dut->io_vector_size = 4;
+    dut->io_in_tag = 0;
+    dut->io_in_valid = 1;
+    dut->io_out_ready = 1;
 }
 
 //-----------------------------
@@ -318,6 +321,9 @@ void set_inputs(VPvuTop* dut, uint32_t i1, uint32_t i2, uint8_t op)
     dut->io_src_posit_width = 32;
     dut->io_dst_posit_width = 32;
     dut->io_vector_size = 1;
+    dut->io_in_tag = 0;
+    dut->io_in_valid = 1;
+    dut->io_out_ready = 1;
 }
 
 //----------------------------------------------------------------------

@@ -245,35 +245,62 @@ PvuResponse expected_for(const PvuRequest& request, ResultKind kind) {
   return response;
 }
 
-class LegacyProtocolAdapter {
+class ProtocolDriver {
  public:
-  explicit LegacyProtocolAdapter(VPvuTop* dut) : dut_(dut) {}
+  explicit ProtocolDriver(VPvuTop* dut) : dut_(dut) {}
 
   void reset() {
+    dut_->io_in_valid = 0;
+    dut_->io_out_ready = 0;
     dut_->reset = 1;
     tick();
     tick();
     dut_->reset = 0;
-    pending_ = false;
+    dut_->eval();
   }
 
-  bool in_ready() const { return !pending_; }
-  bool out_valid() const { return pending_; }
+  bool in_ready() const { return dut_->io_in_ready != 0; }
+  bool out_valid() const { return dut_->io_out_valid != 0; }
 
   void send(const PvuRequest& request) {
-    // The generated baseline has no channel ports yet. This adapter represents
-    // an in_valid && in_ready transfer and makes the combinational result a
-    // one-entry response that is consumed only by recv()'s ready handshake.
     drive(request);
+    dut_->io_in_valid = 1;
+    dut_->eval();
+    size_t cycles = 0;
+    while (!in_ready()) {
+      if (++cycles > 32) throw std::runtime_error("request did not observe in_ready");
+      tick();
+    }
     tick();
-    pending_response_ = sample(request.tag, request.op);
-    pending_ = true;
+    dut_->io_in_valid = 0;
+    dut_->eval();
   }
 
-  PvuResponse recv(bool out_ready) {
-    if (!pending_ || !out_ready) throw std::runtime_error("response handshake requested without valid/ready");
-    pending_ = false;
-    return pending_response_;
+  PvuResponse recv() {
+    wait_for_response();
+    dut_->io_out_ready = 1;
+    dut_->eval();
+    const PvuResponse response = sample();
+    tick();
+    dut_->io_out_ready = 0;
+    dut_->eval();
+    return response;
+  }
+
+  void assert_stable_while_stalled(const PvuRequest& unrelated_request) {
+    wait_for_response();
+    dut_->io_out_ready = 0;
+    const PvuResponse held = sample();
+    drive(unrelated_request);
+    dut_->io_in_valid = 1;
+    for (size_t cycle = 0; cycle < 3; ++cycle) {
+      if (in_ready()) throw std::runtime_error("in_ready asserted while one response is stalled");
+      if (!same_response(held, sample())) {
+        throw std::runtime_error("response changed while out_valid && !out_ready");
+      }
+      tick();
+    }
+    dut_->io_in_valid = 0;
   }
 
  private:
@@ -295,6 +322,7 @@ class LegacyProtocolAdapter {
     dut_->io_float_i_2 = request.float_i[2]; dut_->io_float_i_3 = request.float_i[3];
     dut_->io_float_i2_0 = request.float_i2[0]; dut_->io_float_i2_1 = request.float_i2[1];
     dut_->io_float_i2_2 = request.float_i2[2]; dut_->io_float_i2_3 = request.float_i2[3];
+    dut_->io_in_tag = request.tag;
     dut_->io_op = request.op;
     dut_->io_Isposit = request.is_posit;
     dut_->io_Outposit = request.out_posit;
@@ -305,10 +333,18 @@ class LegacyProtocolAdapter {
     dut_->io_vector_size = request.vector_size;
   }
 
-  PvuResponse sample(uint32_t tag, uint8_t op) const {
+  void wait_for_response() {
+    size_t cycles = 0;
+    while (!out_valid()) {
+      if (++cycles > 32) throw std::runtime_error("accepted request produced no out_valid");
+      tick();
+    }
+  }
+
+  PvuResponse sample() const {
     PvuResponse response{};
-    response.tag = tag;
-    response.op = op;
+    response.tag = static_cast<uint32_t>(dut_->io_out_tag);
+    response.op = static_cast<uint8_t>(dut_->io_out_op);
     response.posit = {static_cast<uint32_t>(dut_->io_posit_o_0), static_cast<uint32_t>(dut_->io_posit_o_1),
                       static_cast<uint32_t>(dut_->io_posit_o_2), static_cast<uint32_t>(dut_->io_posit_o_3)};
     response.posit_dot = static_cast<uint32_t>(dut_->io_posit_dot_o);
@@ -320,9 +356,13 @@ class LegacyProtocolAdapter {
     return response;
   }
 
+  static bool same_response(const PvuResponse& lhs, const PvuResponse& rhs) {
+    return lhs.tag == rhs.tag && lhs.op == rhs.op && lhs.posit == rhs.posit &&
+      lhs.posit_dot == rhs.posit_dot && lhs.floating == rhs.floating &&
+      lhs.float_dot == rhs.float_dot && lhs.integer == rhs.integer;
+  }
+
   VPvuTop* dut_;
-  bool pending_ = false;
-  PvuResponse pending_response_{};
 };
 
 std::array<uint32_t, kLanes> repeat(uint32_t value) { return {value, value, value, value}; }
@@ -1224,7 +1264,7 @@ bool matches(const TestCase& test, const PvuResponse& actual, std::string& reaso
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   VPvuTop dut;
-  LegacyProtocolAdapter adapter(&dut);
+  ProtocolDriver adapter(&dut);
   adapter.reset();
   const std::vector<TestCase> tests = build_tests();
   std::map<std::string, std::pair<size_t, size_t>> summary;
@@ -1234,7 +1274,13 @@ int main(int argc, char** argv) {
     if (!adapter.in_ready()) throw std::runtime_error("input valid/ready handshake blocked by pending response");
     adapter.send(test.request);
     if (!adapter.out_valid()) throw std::runtime_error("accepted request produced no response valid");
-    const PvuResponse actual = adapter.recv(true);
+    // A disconnected request must not affect a stalled response.  The buffer
+    // must also deassert in_ready until the held response handshakes.
+    PvuRequest unrelated = base_request(test.request.tag ^ 0xa5a5u, 3);
+    unrelated.posit_i1 = repeat(kFour);
+    unrelated.posit_i2 = repeat(kNegHalf);
+    adapter.assert_stable_while_stalled(unrelated);
+    const PvuResponse actual = adapter.recv();
     ++summary[test.operation].first;
     std::string reason;
     if (!matches(test, actual, reason)) {
@@ -1249,7 +1295,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::cout << "Exact SoftPosit PVU protocol regression (legacy always-ready adapter)\n";
+  std::cout << "Exact SoftPosit PVU ready/valid protocol regression\n";
   for (const auto& [operation, counts] : summary) {
     std::cout << operation << ": samples=" << counts.first << " mismatches=" << counts.second << "\n";
   }
