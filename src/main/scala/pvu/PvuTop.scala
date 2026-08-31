@@ -255,6 +255,31 @@
    val dotHasRawPositNaR = (0 until MAX_VECTOR_SIZE)
      .map(i => valid_range(i) && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR))
      .reduce(_ || _)
+   val exactP32Mul = Module(new ExactP32Mul(MAX_VECTOR_SIZE))
+   for (i <- 0 until MAX_VECTOR_SIZE) {
+     val rawP32 = io.Isposit && ACTUAL_SRC_POSIT_WIDTH === 32.U
+     val lhsMax = io.posit_i1(i) === "h7fffffff".U || io.posit_i1(i) === "h80000001".U
+     val rhsMax = io.posit_i2(i) === "h7fffffff".U || io.posit_i2(i) === "h80000001".U
+     exactP32Mul.io.sign1_i(i) := pir_sign(i)
+     exactP32Mul.io.sign2_i(i) := pir_sign2(i)
+     exactP32Mul.io.exp1_i(i) := Mux(rawP32 && lhsMax, 120.S, pir_exp(i))
+     exactP32Mul.io.exp2_i(i) := Mux(rawP32 && rhsMax, 120.S, pir_exp2(i))
+     exactP32Mul.io.frac1_i(i) := pir_frac(i)
+     exactP32Mul.io.frac2_i(i) := pir_frac2(i)
+   }
+   val dotUsesSequentialP32 = io.Isposit && io.Outposit && io.op === 5.U &&
+     ACTUAL_SRC_POSIT_WIDTH === 32.U && ACTUAL_DST_POSIT_WIDTH === 32.U
+   val sequentialP32Dot = Wire(Vec(MAX_VECTOR_SIZE + 1, UInt(32.W)))
+   sequentialP32Dot(0) := 0.U
+   for (i <- 0 until MAX_VECTOR_SIZE) {
+     val fusedStage = Module(new Posit32MulAdd(SRC_EXP_WIDTH_MAX))
+     fusedStage.io.multiplicand_i := io.posit_i1(i)
+     fusedStage.io.multiplier_i := io.posit_i2(i)
+     fusedStage.io.accumulator_i := sequentialP32Dot(i)
+     sequentialP32Dot(i + 1) := Mux(valid_range(i), fusedStage.io.posit_o, sequentialP32Dot(i))
+   }
+
+
    val divInputInvalid = Wire(Vec(MAX_VECTOR_SIZE, Bool()))
    val divInputInfinite = Wire(Vec(MAX_VECTOR_SIZE, Bool()))
    val divInputZero = Wire(Vec(MAX_VECTOR_SIZE, Bool()))
@@ -450,8 +475,13 @@
    
      mul.io.pir_sign1_i := pir_sign
      mul.io.pir_sign2_i := pir_sign2
-     mul.io.pir_exp1_i  := pir_exp
-     mul.io.pir_exp2_i  := pir_exp2
+     for (i <- 0 until MAX_VECTOR_SIZE) {
+       val rawP32 = io.Isposit && ACTUAL_SRC_POSIT_WIDTH === 32.U
+       val lhsMax = io.posit_i1(i) === "h7fffffff".U || io.posit_i1(i) === "h80000001".U
+       val rhsMax = io.posit_i2(i) === "h7fffffff".U || io.posit_i2(i) === "h80000001".U
+       mul.io.pir_exp1_i(i) := Mux(rawP32 && lhsMax, 120.S, pir_exp(i))
+       mul.io.pir_exp2_i(i) := Mux(rawP32 && rhsMax, 120.S, pir_exp2(i))
+     }
      mul.io.pir_frac1_i := pir_frac
      mul.io.pir_frac2_i := pir_frac2
    
@@ -1085,7 +1115,8 @@
      
      // 根据Outposit信号选择输出格式
      when(io.Outposit) {
-       io.posit_dot_o := Mux(io.Isposit && dotHasRawPositNaR, rawPositNaR, posit_result)
+       io.posit_dot_o := Mux(io.Isposit && dotHasRawPositNaR, rawPositNaR,
+         Mux(dotUsesSequentialP32, sequentialP32Dot(MAX_VECTOR_SIZE), posit_result))
        io.float_dot_o := 0.U(FLOAT_WIDTH.W)
      }.otherwise {
        io.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
@@ -1258,6 +1289,10 @@
              io.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
            }.elsewhen(io.Isposit && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR)) {
              io.posit_o(i) := rawPositNaR
+           }.elsewhen(io.op === 3.U && io.Isposit && ACTUAL_SRC_POSIT_WIDTH === 32.U &&
+             ACTUAL_DST_POSIT_WIDTH === 32.U) {
+             io.posit_o(i) := exactP32Mul.io.posit_o(i)
+
            }.otherwise {
              io.posit_o(i) := posit_results(i)
            }

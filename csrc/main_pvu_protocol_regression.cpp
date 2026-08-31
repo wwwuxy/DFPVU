@@ -117,9 +117,11 @@ uint32_t ref_binary(uint8_t op, uint32_t lhs, uint32_t rhs) {
 }
 
 uint32_t ref_dot(const std::array<uint32_t, kLanes>& lhs,
-                 const std::array<uint32_t, kLanes>& rhs) {
+                 const std::array<uint32_t, kLanes>& rhs, uint8_t vector_size) {
   posit32_t accumulator = posit(0);
-  for (size_t lane = 0; lane < kLanes; ++lane) {
+  const size_t active_lanes = vector_size == 0 ? kLanes :
+    (static_cast<size_t>(vector_size) < kLanes ? static_cast<size_t>(vector_size) : kLanes);
+  for (size_t lane = 0; lane < active_lanes; ++lane) {
     accumulator = p32_mulAdd(posit(lhs[lane]), posit(rhs[lane]), accumulator);
   }
   return bits(accumulator);
@@ -228,7 +230,7 @@ PvuResponse expected_for(const PvuRequest& request, ResultKind kind) {
       }
       break;
     case ResultKind::kPositDot:
-      response.posit_dot = ref_dot(request.posit_i1, request.posit_i2);
+      response.posit_dot = ref_dot(request.posit_i1, request.posit_i2, request.vector_size);
       break;
     case ResultKind::kFloatVector:
       for (size_t lane = 0; lane < kLanes; ++lane) {
@@ -364,6 +366,15 @@ void add_posit_case(std::vector<TestCase>& tests, const std::string& operation,
   expected.op = request.op;
   expected.posit = expected_posit;
   tests.push_back({operation, category, request, expected, ResultKind::kPositVector});
+}
+
+void add_posit_dot_case(std::vector<TestCase>& tests, const std::string& category,
+                        PvuRequest request, uint32_t expected_dot) {
+  PvuResponse expected{};
+  expected.tag = request.tag;
+  expected.op = request.op;
+  expected.posit_dot = expected_dot;
+  tests.push_back({"op5", category, request, expected, ResultKind::kPositDot});
 }
 
 void add_float_case(std::vector<TestCase>& tests, uint8_t mode, const std::string& category,
@@ -578,6 +589,45 @@ std::vector<TestCase> build_tests() {
     request.posit_i2 = {kOne, kNegOne, kNaR, 0x87654321u};
     add_posit_case(tests, "op2", "inactive-lanes-zero", request,
                    {kOne, kNegOne, 0, 0});
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 3);
+    request.posit_i1 = {kHalf, kTwo, kNegHalf, kMaxPos};
+    request.posit_i2 = {kHalf, kQuarter, kHalf, kOne};
+    add_posit_case(tests, "op3", "signed-scale-and-maxpos", request,
+                   {kQuarter, kHalf, 0xd0000000u, kMaxPos});
+  }
+  {
+    PvuRequest request = base_request(tag++, 3);
+    request.posit_i1 = repeat(0);
+    request.posit_i2 = {kMinPos, kMaxPos, 0xffffffffu, kNegMaxPos};
+    add_posit_case(tests, "op3", "zero-times-signed-extrema", request, repeat(0));
+  }
+  {
+    PvuRequest request = base_request(tag++, 3);
+    request.posit_i1 = {kMinPos, kMaxPos, 0xffffffffu, kNegMaxPos};
+    request.posit_i2 = repeat(0);
+    add_posit_case(tests, "op3", "signed-extrema-times-zero", request, repeat(0));
+  }
+  {
+    PvuRequest request = base_request(tag++, 3);
+    request.posit_i1 = repeat(kNaR);
+    request.posit_i2 = {kMinPos, kMaxPos, 0xffffffffu, kNegMaxPos};
+    add_posit_case(tests, "op3", "nar-times-signed-extrema", request, repeat(kNaR));
+  }
+  {
+    PvuRequest request = base_request(tag++, 3);
+    request.posit_i1 = {kMinPos, kMaxPos, 0xffffffffu, kNegMaxPos};
+    request.posit_i2 = repeat(kNaR);
+    add_posit_case(tests, "op3", "signed-extrema-times-nar", request, repeat(kNaR));
+  }
+  {
+    PvuRequest request = base_request(tag++, 3);
+    request.posit_i1 = repeat(0x464cdf6fu);
+    request.posit_i2 = repeat(0x43ab5f8fu);
+    add_posit_case(tests, "op3", "normalize-product-lsb-sticky", request,
+                   repeat(0x4a6e0499u));
   }
 
   {
@@ -870,6 +920,42 @@ std::vector<TestCase> build_tests() {
     add_case(tests, "op5", boundary.first, request, ResultKind::kPositDot);
   }
 
+  {
+    PvuRequest request = base_request(tag++, 5);
+    request.posit_i1 = {0x48000000u, 0x79194000u, 0x50000000u, 0x00000000u};
+    request.posit_i2 = request.posit_i1;
+    add_posit_dot_case(tests, "sequential-rounded-accumulation", request,
+                       0x7f469fb2u);
+  }
+  {
+    PvuRequest request = base_request(tag++, 5);
+    request.posit_i1 = {0x464cdf6fu, 0u, 0u, 0u};
+    request.posit_i2 = {0x43ab5f8fu, kOne, kOne, kOne};
+    add_posit_dot_case(tests, "fused-normalize-product-lsb-sticky", request,
+                       0x4a6e0499u);
+  }
+
+  {
+    const std::array<uint32_t, kLanes> lhs{{0xde3d9385u, 0xef1fc26du, 0x9cd48b28u, 0x1f35fc38u}};
+    const std::array<uint32_t, kLanes> rhs{{0x369800e1u, 0xdbd84b1cu, 0xa25d4f24u, 0x6b7dbfbcu}};
+    for (size_t prefix = 1; prefix <= kLanes; ++prefix) {
+      PvuRequest request = base_request(tag++, 5);
+      request.vector_size = static_cast<uint8_t>(prefix);
+      request.posit_i1 = lhs;
+      request.posit_i2 = rhs;
+      add_case(tests, "op5", "fused-prefix-" + std::to_string(prefix), request,
+               ResultKind::kPositDot);
+    }
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 5);
+    request.vector_size = 1;
+    request.posit_i1 = {kOne, kNaR, kNaR, kNaR};
+    request.posit_i2 = {kTwo, kNaR, kNaR, kNaR};
+    add_case(tests, "op5", "inactive-lane-nar-is-ignored", request, ResultKind::kPositDot);
+  }
+
   for (size_t lane = 0; lane < kLanes; ++lane) {
     PvuRequest lhs_nar = base_request(tag++, 5);
     lhs_nar.posit_i1 = repeat(kOne);
@@ -1080,6 +1166,28 @@ std::vector<TestCase> build_tests() {
       add_case(tests, "op7-posit-to-fp" + std::to_string(mode), "seed-0x5eed1234-" + std::to_string(sample), request, ResultKind::kFloatVector);
     }
   }
+  std::mt19937 mul_seeded(0x4d553332u);
+  for (size_t sample = 0; sample < 512; ++sample) {
+    PvuRequest request = base_request(tag++, 3);
+    for (size_t lane = 0; lane < kLanes; ++lane) {
+      request.posit_i1[lane] = mul_seeded();
+      request.posit_i2[lane] = mul_seeded();
+    }
+    add_case(tests, "op3", "exact-random-0x4d553332-" + std::to_string(sample),
+             request, ResultKind::kPositVector);
+  }
+
+  std::mt19937 dot_seeded(0xd07f32u);
+  for (size_t sample = 0; sample < 512; ++sample) {
+    PvuRequest request = base_request(tag++, 5);
+    for (size_t lane = 0; lane < kLanes; ++lane) {
+      request.posit_i1[lane] = dot_seeded();
+      request.posit_i2[lane] = dot_seeded();
+    }
+    add_case(tests, "op5", "fused-random-0xd07f32-" + std::to_string(sample),
+             request, ResultKind::kPositDot);
+  }
+
   return tests;
 }
 
