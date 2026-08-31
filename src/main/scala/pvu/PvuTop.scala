@@ -59,6 +59,96 @@
    val posit_dot_o = UInt(maxPositWidth.W)
    val int_o = Vec(maxVectorSize, SInt(intWidth.W))
  }
+
+
+/** Core-stage results are intentionally tag/op-free.  Only the response
+  * arbiter creates a PvuResponse, so arithmetic data cannot bypass the typed
+  * pipeline payloads as a prebuilt final response.
+  */
+class PvuCoreResults(
+  maxPositWidth: Int,
+  maxVectorSize: Int,
+  floatWidth: Int,
+  intWidth: Int
+) extends Bundle {
+  val float_o = Vec(maxVectorSize, UInt(floatWidth.W))
+  val float_dot_o = UInt(floatWidth.W)
+  val posit_o = Vec(maxVectorSize, UInt(maxPositWidth.W))
+  val posit_dot_o = UInt(maxPositWidth.W)
+  val int_o = Vec(maxVectorSize, SInt(intWidth.W))
+}
+
+class PvuCorePayload(
+  maxPositWidth: Int,
+  maxVectorSize: Int,
+  floatWidth: Int,
+  intWidth: Int,
+  expWidth: Int,
+  coreFracWidth: Int,
+  productWidth: Int
+) extends Bundle {
+  val request = new PvuRequest(maxPositWidth, maxVectorSize, floatWidth)
+  val sign = Vec(maxVectorSize, UInt(1.W))
+  val exp = Vec(maxVectorSize, SInt(expWidth.W))
+  val frac = Vec(maxVectorSize, UInt(coreFracWidth.W))
+  val productSign = Vec(maxVectorSize, UInt(1.W))
+  val productExp = Vec(maxVectorSize, SInt(expWidth.W))
+  val productFrac = Vec(maxVectorSize, UInt(productWidth.W))
+  // These are results of genuinely core-complete operations (conversion,
+  // compare and integer conversion) and exact raw-P32 arithmetic packers.
+  // They are not a prebuilt protocol response: tag/op and routing remain in
+  // the request, while normalize/encode still consume the PIR fields above.
+  val corePosit = Vec(maxVectorSize, UInt(maxPositWidth.W))
+  val corePositDot = UInt(maxPositWidth.W)
+  val coreFloat = Vec(maxVectorSize, UInt(floatWidth.W))
+  val coreFloatDot = UInt(floatWidth.W)
+  val coreInt = Vec(maxVectorSize, SInt(intWidth.W))
+}
+
+class PvuReducedPayload(
+  maxPositWidth: Int,
+  maxVectorSize: Int,
+  floatWidth: Int,
+  intWidth: Int,
+  expWidth: Int,
+  coreFracWidth: Int,
+  dotWidth: Int
+) extends Bundle {
+  val request = new PvuRequest(maxPositWidth, maxVectorSize, floatWidth)
+  val sign = Vec(maxVectorSize, UInt(1.W))
+  val exp = Vec(maxVectorSize, SInt(expWidth.W))
+  val frac = Vec(maxVectorSize, UInt(coreFracWidth.W))
+  val dotSign = UInt(1.W)
+  val dotExp = SInt(expWidth.W)
+  val dotFrac = UInt(dotWidth.W)
+  val corePosit = Vec(maxVectorSize, UInt(maxPositWidth.W))
+  val corePositDot = UInt(maxPositWidth.W)
+  val coreFloat = Vec(maxVectorSize, UInt(floatWidth.W))
+  val coreFloatDot = UInt(floatWidth.W)
+  val coreInt = Vec(maxVectorSize, SInt(intWidth.W))
+}
+
+class PvuNormalizedPayload(
+  maxPositWidth: Int,
+  maxVectorSize: Int,
+  floatWidth: Int,
+  intWidth: Int,
+  expWidth: Int,
+  normFracWidth: Int
+) extends Bundle {
+  val request = new PvuRequest(maxPositWidth, maxVectorSize, floatWidth)
+  val sign = Vec(maxVectorSize, UInt(1.W))
+  val exp = Vec(maxVectorSize, SInt(expWidth.W))
+  val frac = Vec(maxVectorSize, UInt(normFracWidth.W))
+  val dotSign = UInt(1.W)
+  val dotExp = SInt(expWidth.W)
+  val dotFrac = UInt(normFracWidth.W)
+  val corePosit = Vec(maxVectorSize, UInt(maxPositWidth.W))
+  val corePositDot = UInt(maxPositWidth.W)
+  val coreFloat = Vec(maxVectorSize, UInt(floatWidth.W))
+  val coreFloatDot = UInt(floatWidth.W)
+  val coreInt = Vec(maxVectorSize, SInt(intWidth.W))
+}
  
  class PvuTop(
    val MAX_POSIT_WIDTH: Int, // 最大位宽参数，用于定义输出接口的位宽，支持不同精度之间的转换
@@ -170,85 +260,63 @@
   inputRequest.vector_size := io.vector_size
   inputRequest.dst_posit_width := io.dst_posit_width
 
-  // Fixed-latency non-division pipeline.  A single clock-enable freezes every
-  // boundary when the response buffer is stalled, so no in-flight payload can
-  // be overwritten.  Complete request controls travel beside the response at
-  // every boundary even when the result bits are already determined.
-  val request = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
-  val requestValid = RegInit(false.B)
-  val coreRequest = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
-  val coreResponse = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  private val PIPE_FRAC_WIDTH = MAX_POSIT_WIDTH - ES - 2
+  private val PIPE_PRODUCT_WIDTH = 2 * PIPE_FRAC_WIDTH
+  private val PIPE_DOT_WIDTH = PIPE_PRODUCT_WIDTH + log2Ceil(MAX_VECTOR_SIZE) + 1
+  private val PIPE_CORE_FRAC_WIDTH = Math.max(MAX_ALIGN_WIDTH, PIPE_PRODUCT_WIDTH)
+
+  // Decode, core/product, signed reduction, normalization and encode are five
+  // distinct registered boundaries.  A shared clock-enable gives this fixed
+  // lane precise freeze-on-backpressure behavior.
+  val decodedRequest = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
+  val decodedSign1 = Reg(Vec(MAX_VECTOR_SIZE, UInt(1.W)))
+  val decodedSign2 = Reg(Vec(MAX_VECTOR_SIZE, UInt(1.W)))
+  val decodedExp1 = Reg(Vec(MAX_VECTOR_SIZE, SInt(SRC_EXP_WIDTH_MAX.W)))
+  val decodedExp2 = Reg(Vec(MAX_VECTOR_SIZE, SInt(SRC_EXP_WIDTH_MAX.W)))
+  val decodedFrac1 = Reg(Vec(MAX_VECTOR_SIZE, UInt(PIPE_FRAC_WIDTH.W)))
+  val decodedFrac2 = Reg(Vec(MAX_VECTOR_SIZE, UInt(PIPE_FRAC_WIDTH.W)))
+  val decodedValid = RegInit(false.B)
+  val corePayload = Reg(new PvuCorePayload(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE,
+    FLOAT_WIDTH, INT_WIDTH, SRC_EXP_WIDTH_MAX, PIPE_CORE_FRAC_WIDTH, PIPE_PRODUCT_WIDTH))
   val coreValid = RegInit(false.B)
-  val normalizeRequest = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
-  val normalizeResponse = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  val reducedPayload = Reg(new PvuReducedPayload(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE,
+    FLOAT_WIDTH, INT_WIDTH, SRC_EXP_WIDTH_MAX, PIPE_CORE_FRAC_WIDTH, PIPE_DOT_WIDTH))
+  val reducedValid = RegInit(false.B)
+  val normalizedPayload = Reg(new PvuNormalizedPayload(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE,
+    FLOAT_WIDTH, INT_WIDTH, SRC_EXP_WIDTH_MAX, PIPE_FRAC_WIDTH))
   val normalizeValid = RegInit(false.B)
-  val encodeRequest = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
   val encodeResponse = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
   val encodeValid = RegInit(false.B)
   val response = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
-  val combinationalResponse = Wire(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  val combinationalCoreResult = Wire(new PvuCoreResults(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE,
+    FLOAT_WIDTH, INT_WIDTH))
   val responseValid = RegInit(false.B)
 
-  // Division owns a dedicated request slot from acceptance through response
-  // handoff.  It is injected into the execution pipeline exactly once and the
-  // slot cannot be overwritten while busy.
-  val divisionRequest = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
-  val divisionPending = RegInit(false.B)
+  // Division owns an independent multi-cycle lane.  Its core and result slots
+  // are independent of the fixed-latency lane, so a busy divide does not block
+  // later non-divides.  A new divide is admitted only after all older traffic
+  // has retired, which makes the priority response arbiter strictly ordered.
+  val divisionCore = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  val divisionCoreValid = RegInit(false.B)
+  val divisionResult = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  val divisionResultValid = RegInit(false.B)
   val divisionBusy = RegInit(false.B)
 
-  val pipelineAdvance = !responseValid || io.out_ready
-  val pipelineEmpty = !requestValid && !coreValid && !normalizeValid &&
-    !encodeValid && !responseValid && !divisionPending
+  val outputCanAccept = !responseValid || io.out_ready
+  val nonDivisionWillIssue = encodeValid && outputCanAccept && !divisionResultValid
+  val pipelineAdvance = !encodeValid || nonDivisionWillIssue
+  val fixedLaneEmpty = !decodedValid && !coreValid && !reducedValid &&
+    !normalizeValid && !encodeValid && !responseValid
   val inputIsDivision = io.op === 4.U
-  io.in_ready := !divisionBusy && pipelineAdvance &&
-    Mux(inputIsDivision, pipelineEmpty, true.B)
+  io.in_ready := pipelineAdvance && Mux(inputIsDivision,
+    !divisionBusy && fixedLaneEmpty && !divisionCoreValid && !divisionResultValid,
+    true.B)
   val inFire = io.in_valid && io.in_ready
   val nonDivisionFire = inFire && !inputIsDivision
   val divisionFire = inFire && inputIsDivision
 
-  val executedResponse = Wire(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
-  executedResponse := combinationalResponse
-  executedResponse.tag := request.tag
-  executedResponse.op := request.op
-
-  when(pipelineAdvance) {
-    responseValid := encodeValid
-    when(encodeValid) {
-      response := encodeResponse
-    }
-
-    encodeValid := normalizeValid
-    when(normalizeValid) {
-      encodeRequest := normalizeRequest
-      encodeResponse := normalizeResponse
-    }
-
-    normalizeValid := coreValid
-    when(coreValid) {
-      normalizeRequest := coreRequest
-      normalizeResponse := coreResponse
-    }
-
-    coreValid := requestValid
-    when(requestValid) {
-      coreRequest := request
-      coreResponse := executedResponse
-    }
-
-    requestValid := divisionPending || nonDivisionFire
-    when(divisionPending) {
-      request := divisionRequest
-    }.elsewhen(nonDivisionFire) {
-      request := inputRequest
-    }
-  }
-
   when(divisionFire) {
-    divisionRequest := inputRequest
-    divisionPending := true.B
     divisionBusy := true.B
-  }.elsewhen(pipelineAdvance && divisionPending) {
-    divisionPending := false.B
   }
 
   when(responseValid && io.out_ready && response.op === 4.U) {
@@ -262,7 +330,7 @@
   // From this point through final result selection, every historic io operand
   // reference resolves to the accepted request register, never to live pins.
   locally {
-  val io = request
+  val io = decodedRequest
 
   // 添加decode模块实例
   val decode1 = Module(new PositDecode(LIMITED_POSIT_WIDTH, LIMITED_VECTOR_SIZE, ES))
@@ -325,13 +393,11 @@
   val pir_sign_rst = Wire(Vec(LIMITED_VECTOR_SIZE, UInt(1.W)))
 
   // 在类的开始处添加输出端口的默认初始化
-  combinationalResponse.float_o     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(FLOAT_WIDTH.W)))
-  combinationalResponse.tag := 0.U
-  combinationalResponse.op := 0.U
-  combinationalResponse.float_dot_o := 0.U(FLOAT_WIDTH.W)
-  combinationalResponse.posit_o     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(MAX_POSIT_WIDTH.W)))
-  combinationalResponse.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
-  combinationalResponse.int_o       := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.S(INT_WIDTH.W)))
+  combinationalCoreResult.float_o     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(FLOAT_WIDTH.W)))
+  combinationalCoreResult.float_dot_o := 0.U(FLOAT_WIDTH.W)
+  combinationalCoreResult.posit_o     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(MAX_POSIT_WIDTH.W)))
+  combinationalCoreResult.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
+  combinationalCoreResult.int_o       := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.S(INT_WIDTH.W)))
 
   // 初始化FloatDecode模块的输入
   floatDecode1.io.float := io.float_i
@@ -894,12 +960,12 @@
      // 如果float_posit为false，则进行Posit到Float的转换
      when(io.float_posit) {
        // Float到Posit转换 - 仅处理操作数1
-       combinationalResponse.posit_o := float2posit_out
-       combinationalResponse.float_o := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(FLOAT_WIDTH.W)))
+       combinationalCoreResult.posit_o := float2posit_out
+       combinationalCoreResult.float_o := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(FLOAT_WIDTH.W)))
      }.otherwise {
        // Posit到Float转换 - 仅处理操作数1
-       combinationalResponse.float_o := posit2float_out
-       combinationalResponse.posit_o := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(MAX_POSIT_WIDTH.W)))
+       combinationalCoreResult.float_o := posit2float_out
+       combinationalCoreResult.posit_o := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(MAX_POSIT_WIDTH.W)))
      }
    }.elsewhen(io.op === 8.U) {  // Greater - 比较并输出较大值
      val greater = Module(new PositGreater(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, MAX_ALIGN_WIDTH, ES))
@@ -923,7 +989,7 @@
      // 直接使用greater模块的posit输出
      for(i <- 0 until MAX_VECTOR_SIZE) {
        when(valid_range(i)) {
-         combinationalResponse.posit_o(i) := Mux(
+         combinationalCoreResult.posit_o(i) := Mux(
            io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR,
            rawPositNaR,
            Mux(io.posit_i1(i).asSInt >= io.posit_i2(i).asSInt, io.posit_i1(i), io.posit_i2(i))
@@ -952,7 +1018,7 @@
      // 直接使用less模块的posit输出
      for(i <- 0 until MAX_VECTOR_SIZE) {
        when(valid_range(i)) {
-         combinationalResponse.posit_o(i) := Mux(
+         combinationalCoreResult.posit_o(i) := Mux(
            io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR,
            rawPositNaR,
            Mux(io.posit_i1(i).asSInt <= io.posit_i2(i).asSInt, io.posit_i1(i), io.posit_i2(i))
@@ -972,7 +1038,7 @@
      
      for (i <- 0 until MAX_VECTOR_SIZE) {
        when (valid_range(i)) {
-         combinationalResponse.int_o(i) := tranInt.io.int_o(i)
+         combinationalCoreResult.int_o(i) := tranInt.io.int_o(i)
        }
      }
    }
@@ -1270,12 +1336,12 @@
      
      // 根据Outposit信号选择输出格式
      when(io.Outposit) {
-       combinationalResponse.posit_dot_o := Mux(io.Isposit && dotHasRawPositNaR, rawPositNaR,
+       combinationalCoreResult.posit_dot_o := Mux(io.Isposit && dotHasRawPositNaR, rawPositNaR,
          Mux(dotUsesSequentialP32, sequentialP32Dot(MAX_VECTOR_SIZE), posit_result))
-       combinationalResponse.float_dot_o := 0.U(FLOAT_WIDTH.W)
+       combinationalCoreResult.float_dot_o := 0.U(FLOAT_WIDTH.W)
      }.otherwise {
-       combinationalResponse.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
-       combinationalResponse.float_dot_o := float_result
+       combinationalCoreResult.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
+       combinationalCoreResult.float_dot_o := float_result
      }
      
    }.elsewhen(io.op === 6.U){
@@ -1283,7 +1349,7 @@
      val isP32ToP16 = ACTUAL_SRC_POSIT_WIDTH === 32.U && ACTUAL_DST_POSIT_WIDTH === 16.U
      for(i <- 0 until MAX_VECTOR_SIZE) {
        when(valid_range(i) && isP32ToP16) {
-         combinationalResponse.posit_o(i) := p32ToP16.io.posit_o(i)
+         combinationalCoreResult.posit_o(i) := p32ToP16.io.posit_o(i)
        }
      }
    }.elsewhen(io.op === 7.U){
@@ -1437,35 +1503,297 @@
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
            when(addSubUsesRawP32) {
-             combinationalResponse.posit_o(i) := rawAddSub.io.posit_o(i)
+             combinationalCoreResult.posit_o(i) := rawAddSub.io.posit_o(i)
            }.elsewhen(io.op === 4.U && (divInputInvalid(i) || divInputInfinite(i))) {
-             combinationalResponse.posit_o(i) := rawPositNaR
+             combinationalCoreResult.posit_o(i) := rawPositNaR
            }.elsewhen(io.op === 4.U && divInputZero(i)) {
-             combinationalResponse.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
+             combinationalCoreResult.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
            }.elsewhen(io.Isposit && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR)) {
-             combinationalResponse.posit_o(i) := rawPositNaR
+             combinationalCoreResult.posit_o(i) := rawPositNaR
            }.elsewhen(io.op === 3.U && io.Isposit && ACTUAL_SRC_POSIT_WIDTH === 32.U &&
              ACTUAL_DST_POSIT_WIDTH === 32.U) {
-             combinationalResponse.posit_o(i) := exactP32Mul.io.posit_o(i)
+             combinationalCoreResult.posit_o(i) := exactP32Mul.io.posit_o(i)
 
            }.otherwise {
-             combinationalResponse.posit_o(i) := posit_results(i)
+             combinationalCoreResult.posit_o(i) := posit_results(i)
            }
-           combinationalResponse.float_o(i) := 0.U(FLOAT_WIDTH.W)
+           combinationalCoreResult.float_o(i) := 0.U(FLOAT_WIDTH.W)
          }
        }
      }.otherwise {
        // 只处理有效范围内的结果
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
-           combinationalResponse.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
-           combinationalResponse.float_o(i) := Mux(io.op === 4.U, div_float_results(i), float_results(i))
+           combinationalCoreResult.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
+           combinationalCoreResult.float_o(i) := Mux(io.op === 4.U, div_float_results(i), float_results(i))
          }
        }
      }
    }
 
   } // captured-request execution scope
+
+  // Decode boundary.  These modules see live pins, but their outputs and the
+  // complete control word are sampled only on an input handshake.
+  val incomingPosit1 = Module(new PositDecode(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, ES))
+  val incomingPosit2 = Module(new PositDecode(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, ES))
+  val incomingFloat1 = Module(new FloatDecode(float_exp_width, float_frac_width, MAX_VECTOR_SIZE))
+  val incomingFloat2 = Module(new FloatDecode(float_exp_width, float_frac_width, MAX_VECTOR_SIZE))
+  incomingPosit1.io.posit := io.posit_i1
+  incomingPosit2.io.posit := io.posit_i2
+  incomingFloat1.io.float := io.float_i
+  incomingFloat2.io.float := io.float_i2
+
+  val incomingSign1 = Wire(Vec(MAX_VECTOR_SIZE, UInt(1.W)))
+  val incomingSign2 = Wire(Vec(MAX_VECTOR_SIZE, UInt(1.W)))
+  val incomingExp1 = Wire(Vec(MAX_VECTOR_SIZE, SInt(SRC_EXP_WIDTH_MAX.W)))
+  val incomingExp2 = Wire(Vec(MAX_VECTOR_SIZE, SInt(SRC_EXP_WIDTH_MAX.W)))
+  val incomingFrac1 = Wire(Vec(MAX_VECTOR_SIZE, UInt(PIPE_FRAC_WIDTH.W)))
+  val incomingFrac2 = Wire(Vec(MAX_VECTOR_SIZE, UInt(PIPE_FRAC_WIDTH.W)))
+  for (lane <- 0 until MAX_VECTOR_SIZE) {
+    incomingSign1(lane) := Mux(io.Isposit, incomingPosit1.io.Sign(lane), incomingFloat1.io.Sign(lane))
+    incomingSign2(lane) := Mux(io.Isposit, incomingPosit2.io.Sign(lane), incomingFloat2.io.Sign(lane))
+    incomingExp1(lane) := Mux(io.Isposit, incomingPosit1.io.Exp(lane), incomingFloat1.io.Exp(lane))
+    incomingExp2(lane) := Mux(io.Isposit, incomingPosit2.io.Exp(lane), incomingFloat2.io.Exp(lane))
+    incomingFrac1(lane) := Mux(io.Isposit, incomingPosit1.io.Frac(lane), incomingFloat1.io.Frac(lane))
+    incomingFrac2(lane) := Mux(io.Isposit, incomingPosit2.io.Frac(lane), incomingFloat2.io.Frac(lane))
+  }
+
+  // Core/product boundary.  Vector arithmetic consumes only decoded registers.
+  val coreAlignment = Module(new FractionAlignment_AddSub(
+    MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, MAX_ALIGN_WIDTH, ES))
+  coreAlignment.io.pir_exp1_i := decodedExp1
+  coreAlignment.io.pir_exp2_i := decodedExp2
+  coreAlignment.io.pir_frac1_i := decodedFrac1
+  coreAlignment.io.pir_frac2_i := decodedFrac2
+  val coreAdd = Module(new Add(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, MAX_ALIGN_WIDTH, ES))
+  val coreSub = Module(new Sub(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, MAX_ALIGN_WIDTH, ES))
+  coreAdd.io.pir_sign1_i := decodedSign1
+  coreAdd.io.pir_sign2_i := decodedSign2
+  coreAdd.io.pir_exp1_i := coreAlignment.io.pir_max_exp
+  coreAdd.io.pir_exp2_i := coreAlignment.io.pir_max_exp
+  coreAdd.io.pir_frac1_aligned := coreAlignment.io.pir_frac1_align
+  coreAdd.io.pir_frac2_aligned := coreAlignment.io.pir_frac2_align
+  coreSub.io.pir_sign1_i := decodedSign1
+  coreSub.io.pir_sign2_i := decodedSign2
+  coreSub.io.pir_exp1_i := coreAlignment.io.pir_max_exp
+  coreSub.io.pir_exp2_i := coreAlignment.io.pir_max_exp
+  coreSub.io.pir_frac1_aligned := coreAlignment.io.pir_frac1_align
+  coreSub.io.pir_frac2_aligned := coreAlignment.io.pir_frac2_align
+  val coreMul = Module(new Mul(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, MAX_ALIGN_WIDTH, ES))
+  coreMul.io.pir_sign1_i := decodedSign1
+  coreMul.io.pir_sign2_i := decodedSign2
+  coreMul.io.pir_exp1_i := decodedExp1
+  coreMul.io.pir_exp2_i := decodedExp2
+  coreMul.io.pir_frac1_i := decodedFrac1
+  coreMul.io.pir_frac2_i := decodedFrac2
+
+  val coreNext = Wire(new PvuCorePayload(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE,
+    FLOAT_WIDTH, INT_WIDTH, SRC_EXP_WIDTH_MAX, PIPE_CORE_FRAC_WIDTH, PIPE_PRODUCT_WIDTH))
+  coreNext := 0.U.asTypeOf(coreNext)
+  coreNext.request := decodedRequest
+  coreNext.corePosit := combinationalCoreResult.posit_o
+  coreNext.corePositDot := combinationalCoreResult.posit_dot_o
+  coreNext.coreFloat := combinationalCoreResult.float_o
+  coreNext.coreFloatDot := combinationalCoreResult.float_dot_o
+  coreNext.coreInt := combinationalCoreResult.int_o
+  val decodedVectorSize = Mux(decodedRequest.vector_size === 0.U,
+    MAX_VECTOR_SIZE.U, decodedRequest.vector_size)
+  for (lane <- 0 until MAX_VECTOR_SIZE) {
+    val active = lane.U < decodedVectorSize
+    when(active) {
+      when(decodedRequest.op === 1.U) {
+        coreNext.sign(lane) := coreAdd.io.pir_sign_o(lane)
+        coreNext.exp(lane) := coreAdd.io.pir_exp_o(lane)
+        coreNext.frac(lane) := coreAdd.io.pir_frac_o(lane)
+      }.elsewhen(decodedRequest.op === 2.U) {
+        coreNext.sign(lane) := coreSub.io.pir_sign_o(lane)
+        coreNext.exp(lane) := coreSub.io.pir_exp_o(lane)
+        coreNext.frac(lane) := coreSub.io.pir_frac_o(lane)
+      }.elsewhen(decodedRequest.op === 3.U) {
+        coreNext.sign(lane) := coreMul.io.pir_sign_o(lane)
+        coreNext.exp(lane) := coreMul.io.pir_exp_o(lane)
+        coreNext.frac(lane) := coreMul.io.pir_frac_o(lane)
+      }
+      coreNext.productSign(lane) := coreMul.io.pir_sign_o(lane)
+      coreNext.productExp(lane) := coreMul.io.pir_exp_o(lane)
+      coreNext.productFrac(lane) := Mux(decodedFrac1(lane) === 0.U || decodedFrac2(lane) === 0.U,
+        0.U, coreMul.io.pir_frac_o(lane))
+    }
+  }
+
+  // Signed-reduction boundary.  Dot products carry real products out of core,
+  // align them here, and reduce explicitly sized two's-complement operands.
+  val dotAlignment = Module(new FractionAlignment_DotProduct(
+    MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, MAX_ALIGN_WIDTH, ES))
+  dotAlignment.io.pir_exp_i := corePayload.productExp
+  dotAlignment.io.pir_frac_i := corePayload.productFrac
+  val dotSignedOperands = Wire(Vec(MAX_VECTOR_SIZE, SInt(PIPE_DOT_WIDTH.W)))
+  for (lane <- 0 until MAX_VECTOR_SIZE) {
+    val magnitude = dotAlignment.io.pir_frac_align(lane).pad(PIPE_DOT_WIDTH).asSInt
+    dotSignedOperands(lane) := Mux(corePayload.productSign(lane) === 1.U, -magnitude, magnitude)
+  }
+  val dotTree = Module(new CsaTree(MAX_VECTOR_SIZE, PIPE_DOT_WIDTH, PIPE_DOT_WIDTH))
+  dotTree.io.operands_i := VecInit(dotSignedOperands.map(_.asUInt))
+  val dotReducedSigned = (dotTree.io.sum_o + dotTree.io.carry_o).asSInt
+  val dotReducedMagnitude = Mux(dotReducedSigned < 0.S,
+    -dotReducedSigned, dotReducedSigned).asUInt
+  val reducedNext = Wire(new PvuReducedPayload(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE,
+    FLOAT_WIDTH, INT_WIDTH, SRC_EXP_WIDTH_MAX, PIPE_CORE_FRAC_WIDTH, PIPE_DOT_WIDTH))
+  reducedNext := 0.U.asTypeOf(reducedNext)
+  reducedNext.request := corePayload.request
+  reducedNext.sign := corePayload.sign
+  reducedNext.exp := corePayload.exp
+  reducedNext.frac := corePayload.frac
+  reducedNext.dotSign := dotReducedSigned < 0.S
+  reducedNext.dotExp := Mux(dotReducedMagnitude === 0.U, 0.S, dotAlignment.io.pir_max_exp)
+  reducedNext.dotFrac := dotReducedMagnitude
+  reducedNext.corePosit := corePayload.corePosit
+  reducedNext.corePositDot := corePayload.corePositDot
+  reducedNext.coreFloat := corePayload.coreFloat
+  reducedNext.coreFloatDot := corePayload.coreFloatDot
+  reducedNext.coreInt := corePayload.coreInt
+
+  // Normalize boundary.  The selected normalizer consumes only reduction-stage
+  // registers; normalization is no longer in the core's combinational cone.
+  val normalizeAddSub = Module(new FracNorm(
+    MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, MAX_ALIGN_WIDTH, 1, ES))
+  val normalizeMul = Module(new FracNorm(
+    MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, PIPE_PRODUCT_WIDTH, PIPE_FRAC_WIDTH / 2, ES))
+  for (lane <- 0 until MAX_VECTOR_SIZE) {
+    normalizeAddSub.io.pir_frac_i(lane) := reducedPayload.frac(lane)(MAX_ALIGN_WIDTH - 1, 0)
+    normalizeMul.io.pir_frac_i(lane) := reducedPayload.frac(lane)(PIPE_PRODUCT_WIDTH - 1, 0)
+  }
+  val normalizeDot = Module(new FracNorm_DotProduct(
+    MAX_POSIT_WIDTH, PIPE_DOT_WIDTH, log2Ceil(MAX_VECTOR_SIZE + 1) + 2, ES))
+  normalizeDot.io.pir_frac_i := reducedPayload.dotFrac
+  val normalizedNext = Wire(new PvuNormalizedPayload(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE,
+    FLOAT_WIDTH, INT_WIDTH, SRC_EXP_WIDTH_MAX, PIPE_FRAC_WIDTH))
+  normalizedNext := 0.U.asTypeOf(normalizedNext)
+  normalizedNext.request := reducedPayload.request
+  normalizedNext.corePosit := reducedPayload.corePosit
+  normalizedNext.corePositDot := reducedPayload.corePositDot
+  normalizedNext.coreFloat := reducedPayload.coreFloat
+  normalizedNext.coreFloatDot := reducedPayload.coreFloatDot
+  normalizedNext.coreInt := reducedPayload.coreInt
+  for (lane <- 0 until MAX_VECTOR_SIZE) {
+    normalizedNext.sign(lane) := reducedPayload.sign(lane)
+    when(reducedPayload.request.op === 3.U) {
+      normalizedNext.frac(lane) := normalizeMul.io.pir_frac_o(lane)
+      normalizedNext.exp(lane) := reducedPayload.exp(lane) + normalizeMul.io.exp_adjust(lane)
+    }.otherwise {
+      normalizedNext.frac(lane) := normalizeAddSub.io.pir_frac_o(lane)
+      normalizedNext.exp(lane) := reducedPayload.exp(lane) + normalizeAddSub.io.exp_adjust(lane)
+    }
+  }
+  normalizedNext.dotSign := reducedPayload.dotSign
+  normalizedNext.dotFrac := normalizeDot.io.pir_frac_o
+  normalizedNext.dotExp := reducedPayload.dotExp + normalizeDot.io.exp_adjust
+
+  // Encode boundary.  Generic-width posit arithmetic is produced from the
+  // normalized registers.  Raw P32 add/sub/mul/dot retain their dedicated exact
+  // packers captured at core, preserving the established SoftPosit bit contract.
+  val pipelineEncoder = Module(new PositEncode(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, ES))
+  pipelineEncoder.io.pir_sign := normalizedPayload.sign
+  pipelineEncoder.io.pir_exp := normalizedPayload.exp
+  pipelineEncoder.io.pir_frac := normalizedPayload.frac
+  val pipelineDotEncoder = Module(new PositEncode_DotProduct(MAX_POSIT_WIDTH, ES))
+  pipelineDotEncoder.io.pir_sign := normalizedPayload.dotSign
+  pipelineDotEncoder.io.pir_exp := normalizedPayload.dotExp
+  pipelineDotEncoder.io.pir_frac := normalizedPayload.dotFrac
+  val encodedNext = Wire(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  encodedNext := 0.U.asTypeOf(encodedNext)
+  encodedNext.tag := normalizedPayload.request.tag
+  encodedNext.op := normalizedPayload.request.op
+  encodedNext.posit_o := normalizedPayload.corePosit
+  encodedNext.posit_dot_o := normalizedPayload.corePositDot
+  encodedNext.float_o := normalizedPayload.coreFloat
+  encodedNext.float_dot_o := normalizedPayload.coreFloatDot
+  encodedNext.int_o := normalizedPayload.coreInt
+  val normalizedSrcWidth = Mux(normalizedPayload.request.src_posit_width === 0.U,
+    MAX_POSIT_WIDTH.U, normalizedPayload.request.src_posit_width)
+  val normalizedDstWidth = Mux(normalizedPayload.request.dst_posit_width === 0.U,
+    normalizedSrcWidth, normalizedPayload.request.dst_posit_width)
+  val genericVectorArithmetic = normalizedPayload.request.Isposit && normalizedPayload.request.Outposit &&
+    normalizedPayload.request.op >= 1.U && normalizedPayload.request.op <= 3.U &&
+    !(normalizedSrcWidth === 32.U && normalizedDstWidth === 32.U)
+  val normalizedVectorSize = Mux(normalizedPayload.request.vector_size === 0.U,
+    MAX_VECTOR_SIZE.U, normalizedPayload.request.vector_size)
+  when(genericVectorArithmetic) {
+    for (lane <- 0 until MAX_VECTOR_SIZE) {
+      when(lane.U < normalizedVectorSize) {
+        val narrowed = (pipelineEncoder.io.posit(lane) >>
+          (MAX_POSIT_WIDTH.U - normalizedDstWidth)) << (MAX_POSIT_WIDTH.U - normalizedDstWidth)
+        encodedNext.posit_o(lane) := Mux(normalizedDstWidth < MAX_POSIT_WIDTH.U,
+          narrowed, pipelineEncoder.io.posit(lane))
+      }.otherwise {
+        encodedNext.posit_o(lane) := 0.U
+      }
+    }
+  }
+  val genericDot = normalizedPayload.request.op === 5.U &&
+    !(normalizedPayload.request.Isposit && normalizedPayload.request.Outposit &&
+      normalizedSrcWidth === 32.U && normalizedDstWidth === 32.U)
+  when(genericDot && normalizedPayload.request.Outposit) {
+    encodedNext.posit_dot_o := pipelineDotEncoder.io.posit
+  }
+
+  val executedDivision = Wire(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  executedDivision := 0.U.asTypeOf(executedDivision)
+  executedDivision.tag := decodedRequest.tag
+  executedDivision.op := decodedRequest.op
+  executedDivision.posit_o := combinationalCoreResult.posit_o
+  executedDivision.posit_dot_o := combinationalCoreResult.posit_dot_o
+  executedDivision.float_o := combinationalCoreResult.float_o
+  executedDivision.float_dot_o := combinationalCoreResult.float_dot_o
+  executedDivision.int_o := combinationalCoreResult.int_o
+
+  // Independent division lane progression.
+  val divisionResultCanAccept = !divisionResultValid || (outputCanAccept && divisionResultValid)
+  when(divisionResultCanAccept) {
+    divisionResultValid := divisionCoreValid
+    when(divisionCoreValid) {
+      divisionResult := divisionCore
+    }
+    divisionCoreValid := false.B
+  }
+
+  // Global elastic progression of the fixed-latency lane.
+  when(pipelineAdvance) {
+    encodeValid := normalizeValid
+    when(normalizeValid) { encodeResponse := encodedNext }
+    normalizeValid := reducedValid
+    when(reducedValid) { normalizedPayload := normalizedNext }
+    reducedValid := coreValid
+    when(coreValid) { reducedPayload := reducedNext }
+    coreValid := decodedValid && decodedRequest.op =/= 4.U
+    when(decodedValid && decodedRequest.op =/= 4.U) { corePayload := coreNext }
+    when(decodedValid && decodedRequest.op === 4.U) {
+      divisionCore := executedDivision
+      divisionCoreValid := true.B
+    }
+    decodedValid := inFire
+    when(inFire) {
+      decodedRequest := inputRequest
+      decodedSign1 := incomingSign1
+      decodedSign2 := incomingSign2
+      decodedExp1 := incomingExp1
+      decodedExp2 := incomingExp2
+      decodedFrac1 := incomingFrac1
+      decodedFrac2 := incomingFrac2
+    }
+  }
+
+  // Ordered response arbitration: an older divide wins over later fixed-lane
+  // traffic; both sources hold their data until the output slot can accept it.
+  when(outputCanAccept) {
+    responseValid := divisionResultValid || encodeValid
+    when(divisionResultValid) {
+      response := divisionResult
+    }.elsewhen(encodeValid) {
+      response := encodeResponse
+    }
+  }
 
   io.float_o := response.float_o
   io.float_dot_o := response.float_dot_o

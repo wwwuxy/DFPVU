@@ -1269,6 +1269,32 @@ void require_match(const TestCase& test, const PvuResponse& actual, const char* 
   }
 }
 
+void run_registered_boundary_latency(ProtocolDriver& adapter, const TestCase& test) {
+  if (test.request.op == 4) {
+    throw std::runtime_error("registered boundary latency test requires a non-division request");
+  }
+
+  adapter.reset();
+  adapter.set_out_ready(true);
+  adapter.present(test.request);
+  if (!adapter.in_ready()) throw std::runtime_error("latency test request was not ready");
+  adapter.advance();
+  adapter.withdraw_request();
+
+  size_t latency = 0;
+  while (!adapter.out_valid()) {
+    if (++latency > 32) throw std::runtime_error("latency test request did not complete");
+    adapter.advance();
+  }
+  if (latency != 5) {
+    throw std::runtime_error("non-division request crossed " + std::to_string(latency) +
+                             " registered boundaries, expected decode/core/reduce/normalize/encode = 5");
+  }
+  require_match(test, adapter.response(), "registered boundary latency response");
+  adapter.advance();
+  adapter.set_out_ready(false);
+}
+
 void run_adjacent_non_division_pipeline(ProtocolDriver& adapter,
                                         const TestCase& a,
                                         const TestCase& b) {
@@ -1319,9 +1345,10 @@ void run_adjacent_non_division_pipeline(ProtocolDriver& adapter,
 
 void run_division_busy_backpressure(ProtocolDriver& adapter,
                                     const TestCase& a,
-                                    const TestCase& b) {
-  if (a.request.op != 4 || b.request.op != 4) {
-    throw std::runtime_error("division busy test requires two division requests");
+                                    const TestCase& b,
+                                    const TestCase& non_division) {
+  if (a.request.op != 4 || b.request.op != 4 || non_division.request.op == 4) {
+    throw std::runtime_error("division concurrency test requires div A, div B, and non-div C");
   }
 
   adapter.reset();
@@ -1330,31 +1357,51 @@ void run_division_busy_backpressure(ProtocolDriver& adapter,
   if (!adapter.in_ready()) throw std::runtime_error("division request A was not ready");
   adapter.advance();
 
+  // Prove that a second division cannot overwrite the occupied lane.
   adapter.present(b.request);
   if (adapter.in_ready()) {
     throw std::runtime_error("second division observed in_ready while the division lane was busy");
   }
-
-  size_t busy_cycles = 0;
-  while (!adapter.out_valid()) {
-    if (adapter.in_ready()) {
-      throw std::runtime_error("division lane dropped busy backpressure before response handoff");
-    }
-    if (++busy_cycles > 32) throw std::runtime_error("division request A did not complete");
-    adapter.advance();
-  }
-  if (busy_cycles == 0) throw std::runtime_error("division lane never entered an observable busy state");
-  require_match(a, adapter.response(), "division response A");
-  if (adapter.in_ready()) {
-    throw std::runtime_error("division lane became ready before response A handoff");
-  }
-
   adapter.advance();
+  adapter.withdraw_request();
+
+  // A non-division request must still use the independent fixed-latency lane.
+  adapter.present(non_division.request);
   if (!adapter.in_ready()) {
-    throw std::runtime_error("division lane remained backpressured after response A handoff");
+    throw std::runtime_error("non-division request C was blocked by an occupied division lane");
   }
   adapter.advance();
   adapter.withdraw_request();
+
+  // Hold B again.  It may handshake only after the older A and C transactions
+  // have completed in order and the division lane/order guard has capacity.
+  adapter.present(b.request);
+  const std::array<const TestCase*, 2> older{{&a, &non_division}};
+  size_t completed = 0;
+  bool b_accepted = false;
+  size_t cycles = 0;
+  while (!b_accepted) {
+    const bool completing = adapter.out_valid();
+    const bool accepting_b = adapter.in_ready();
+    if (completing) {
+      if (completed >= older.size()) {
+        throw std::runtime_error("unexpected response before division B acceptance");
+      }
+      require_match(*older.at(completed), adapter.response(),
+                    "division/non-division ordered response");
+      ++completed;
+    }
+    if (accepting_b && completed != older.size()) {
+      throw std::runtime_error("division B was accepted before all older responses completed");
+    }
+    adapter.advance();
+    b_accepted = accepting_b;
+    if (++cycles > 64) throw std::runtime_error("division B never regained safe lane capacity");
+  }
+  adapter.withdraw_request();
+  if (completed != older.size()) {
+    throw std::runtime_error("division B acceptance bypassed an older response");
+  }
 
   size_t wait_cycles = 0;
   while (!adapter.out_valid()) {
@@ -1394,12 +1441,21 @@ bool run_backpressure_pop_push(ProtocolDriver& adapter, const TestCase& a, const
   expect_front("A response creation");
   const PvuResponse held_a = adapter.response();
 
-  // Present B with a distinct tag while A is stalled.  B must remain valid
-  // until the exact edge that consumes A and accepts B into the one slot.
+  // Present B with a distinct tag while A is stalled.  The execution pipeline
+  // still has capacity, so B may be accepted before A leaves the output slot.
+  // Once accepted, withdraw it exactly as a real ready/valid producer would.
   adapter.present(b.request);
-  for (size_t cycle = 0; cycle < 3; ++cycle) {
+  if (!adapter.in_ready()) {
+    throw std::runtime_error("B was not accepted into an empty execution pipeline");
+  }
+  enqueue(b);
+  adapter.advance();
+  adapter.withdraw_request();
+
+  // Let B fill the fixed-latency lane while A remains backpressured.  The
+  // visible response must stay bit-for-bit stable throughout.
+  for (size_t cycle = 0; cycle < 6; ++cycle) {
     if (!adapter.out_valid()) throw std::runtime_error("out_valid was not continuous during backpressure");
-    if (adapter.in_ready()) throw std::runtime_error("B observed in_ready while A occupied the response slot");
     if (!ProtocolDriver::same_response(held_a, adapter.response())) {
       throw std::runtime_error("A payload/tag/op changed while out_valid && !out_ready");
     }
@@ -1407,14 +1463,10 @@ bool run_backpressure_pop_push(ProtocolDriver& adapter, const TestCase& a, const
   }
 
   adapter.set_out_ready(true);
-  if (!adapter.out_valid() || !adapter.in_ready()) {
-    throw std::runtime_error("one-slot buffer did not expose same-cycle pop/push readiness");
-  }
-  expect_front("A pop/B push edge");
+  if (!adapter.out_valid()) throw std::runtime_error("A disappeared before its response handshake");
+  expect_front("A pop edge");
   ++head;
-  enqueue(b);
   adapter.advance();
-  adapter.withdraw_request();
   adapter.set_out_ready(false);
   size_t b_wait_cycles = 0;
   while (!adapter.out_valid()) {
@@ -1444,10 +1496,12 @@ int main(int argc, char** argv) {
   const std::vector<TestCase> tests = build_tests();
   std::map<std::string, std::pair<size_t, size_t>> summary;
   size_t mismatches = 0;
+  run_registered_boundary_latency(adapter, tests.at(0));
+  std::cout << "registered decode/core/reduce/normalize/encode latency: PASS\n";
   run_adjacent_non_division_pipeline(adapter, tests.at(0), tests.at(10));
   std::cout << "adjacent non-division pipeline: PASS\n";
-  run_division_busy_backpressure(adapter, tests.at(16), tests.at(17));
-  std::cout << "division busy backpressure: PASS\n";
+  run_division_busy_backpressure(adapter, tests.at(16), tests.at(17), tests.at(10));
+  std::cout << "division busy with non-division concurrency: PASS\n";
   adapter.reset();
   run_backpressure_pop_push(adapter, tests.at(0), tests.at(1));
 
