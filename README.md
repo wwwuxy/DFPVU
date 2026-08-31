@@ -33,6 +33,11 @@ Posit 为主要内部数值表示，同时支持 IEEE-754 浮点输入、输出�
 算术、点积、转换或比较单元；最后由 `PositEncode` 或 `FloatEncode` 编码为所选
 输出格式。
 
+顶层采用事务通道：请求仅在 `in_valid && in_ready` 时被接受，`in_tag` 随请求
+锁存；响应以 `out_valid`、`out_tag` 与 `out_op` 标识，并仅在
+`out_valid && out_ready` 时完成传输。响应缓冲为单槽，因此当
+`out_valid && !out_ready` 时所有结果位保持稳定，且 `in_ready` 会去断言。
+
 | 层次 | 主要模块 |
 | --- | --- |
 | 顶层与接口 | `PvuTop.scala`、`Elaborate.scala` |

@@ -145,6 +145,9 @@ int main(int argc, char** argv) {
         tfp->dump(i);  // 转储波形数据
     }
     top->reset = 0;
+    top->io_in_valid = 1;
+    top->io_out_ready = 1;
+    top->io_in_tag = 0;
 
     size_t severe_errors = 0;  // 严重错误数量（误差≥5%）
     size_t minor_errors = 0;   // 轻微错误数量（2%≤误差<5%）

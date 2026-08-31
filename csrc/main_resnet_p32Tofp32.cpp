@@ -93,6 +93,9 @@ int main(int argc, char** argv) {
         tfp->dump(i);  // 转储波形数据
     }
     top->reset = 0;
+    top->io_in_valid = 1;
+    top->io_out_ready = 1;
+    top->io_in_tag = 0;
 
     size_t errors = 0;
     // 向量模式下，我们需要处理的样本数量是SAMPLE_NUM/VECTOR_SIZE（向上取整）

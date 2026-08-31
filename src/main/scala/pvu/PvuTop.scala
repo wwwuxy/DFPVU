@@ -24,6 +24,41 @@
  import chisel3.util._
  import scala.languageFeature.existentials
  import chisel3.stage._
+
+ class PvuRequest(
+   maxPositWidth: Int,
+   maxVectorSize: Int,
+   floatWidth: Int
+ ) extends Bundle {
+   val tag = UInt(32.W)
+   val posit_i1 = Vec(maxVectorSize, UInt(maxPositWidth.W))
+   val posit_i2 = Vec(maxVectorSize, UInt(maxPositWidth.W))
+   val op = UInt(4.W)
+   val Isposit = Bool()
+   val Outposit = Bool()
+   val float_i = Vec(maxVectorSize, UInt(floatWidth.W))
+   val float_i2 = Vec(maxVectorSize, UInt(floatWidth.W))
+   val float_mode = UInt(3.W)
+   val float_posit = Bool()
+   val src_posit_width = UInt(6.W)
+   val vector_size = UInt(3.W)
+   val dst_posit_width = UInt(6.W)
+ }
+
+ class PvuResponse(
+   maxPositWidth: Int,
+   maxVectorSize: Int,
+   floatWidth: Int,
+   intWidth: Int
+ ) extends Bundle {
+   val tag = UInt(32.W)
+   val op = UInt(4.W)
+   val float_o = Vec(maxVectorSize, UInt(floatWidth.W))
+   val float_dot_o = UInt(floatWidth.W)
+   val posit_o = Vec(maxVectorSize, UInt(maxPositWidth.W))
+   val posit_dot_o = UInt(maxPositWidth.W)
+   val int_o = Vec(maxVectorSize, SInt(intWidth.W))
+ }
  
  class PvuTop(
    val MAX_POSIT_WIDTH: Int, // 最大位宽参数，用于定义输出接口的位宽，支持不同精度之间的转换
@@ -80,6 +115,15 @@
    }
 
    val io = IO(new Bundle {
+     // Transactional request/response channel.  Operand and control ports
+     // below are sampled only on in_valid && in_ready.
+     val in_valid = Input(Bool())
+     val in_ready = Output(Bool())
+     val in_tag = Input(UInt(32.W))
+     val out_valid = Output(Bool())
+     val out_ready = Input(Bool())
+     val out_tag = Output(UInt(32.W))
+     val out_op = Output(UInt(4.W))
      // 输入Posit向量
      val posit_i1 = Input(Vec(MAX_VECTOR_SIZE, UInt(MAX_POSIT_WIDTH.W)))
      val posit_i2 = Input(Vec(MAX_VECTOR_SIZE, UInt(MAX_POSIT_WIDTH.W)))
@@ -110,6 +154,40 @@
      val posit_dot_o = Output(UInt(MAX_POSIT_WIDTH.W))           // 使用最大位宽
      val int_o       = Output(Vec(MAX_VECTOR_SIZE, SInt(INT_WIDTH.W)))  // 新增整数输出接口
  })
+
+  // Hold the complete accepted request.  The current Task 3 arithmetic path
+  // remains combinational; this snapshot is the protocol boundary consumed by
+  // the following pipelining task and prevents post-handshake input changes
+  // from becoming architectural state.
+  val request = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
+  val response = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  val combinationalResponse = Wire(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  val responseValid = RegInit(false.B)
+  val inFire = io.in_valid && io.in_ready
+
+  // A one-entry response buffer can be replaced in the same cycle in which
+  // its prior value is consumed.  Otherwise upstream sees backpressure.
+  io.in_ready := !responseValid || io.out_ready
+
+  when(inFire) {
+    request.tag := io.in_tag
+    request.posit_i1 := io.posit_i1
+    request.posit_i2 := io.posit_i2
+    request.op := io.op
+    request.Isposit := io.Isposit
+    request.Outposit := io.Outposit
+    request.float_i := io.float_i
+    request.float_i2 := io.float_i2
+    request.float_mode := io.float_mode
+    request.float_posit := io.float_posit
+    request.src_posit_width := io.src_posit_width
+    request.vector_size := io.vector_size
+    request.dst_posit_width := io.dst_posit_width
+  }
+
+  io.out_valid := responseValid
+  io.out_tag := response.tag
+  io.out_op := response.op
 
   // 添加decode模块实例
   val decode1 = Module(new PositDecode(LIMITED_POSIT_WIDTH, LIMITED_VECTOR_SIZE, ES))
@@ -172,11 +250,13 @@
   val pir_sign_rst = Wire(Vec(LIMITED_VECTOR_SIZE, UInt(1.W)))
 
   // 在类的开始处添加输出端口的默认初始化
-  io.float_o     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(FLOAT_WIDTH.W)))
-  io.float_dot_o := 0.U(FLOAT_WIDTH.W)
-  io.posit_o     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(MAX_POSIT_WIDTH.W)))
-  io.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
-  io.int_o       := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.S(INT_WIDTH.W)))
+  combinationalResponse.float_o     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(FLOAT_WIDTH.W)))
+  combinationalResponse.tag := 0.U
+  combinationalResponse.op := 0.U
+  combinationalResponse.float_dot_o := 0.U(FLOAT_WIDTH.W)
+  combinationalResponse.posit_o     := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(MAX_POSIT_WIDTH.W)))
+  combinationalResponse.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
+  combinationalResponse.int_o       := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.S(INT_WIDTH.W)))
 
   // 初始化FloatDecode模块的输入
   floatDecode1.io.float := io.float_i
@@ -739,12 +819,12 @@
      // 如果float_posit为false，则进行Posit到Float的转换
      when(io.float_posit) {
        // Float到Posit转换 - 仅处理操作数1
-       io.posit_o := float2posit_out
-       io.float_o := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(FLOAT_WIDTH.W)))
+       combinationalResponse.posit_o := float2posit_out
+       combinationalResponse.float_o := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(FLOAT_WIDTH.W)))
      }.otherwise {
        // Posit到Float转换 - 仅处理操作数1
-       io.float_o := posit2float_out
-       io.posit_o := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(MAX_POSIT_WIDTH.W)))
+       combinationalResponse.float_o := posit2float_out
+       combinationalResponse.posit_o := VecInit(Seq.fill(MAX_VECTOR_SIZE)(0.U(MAX_POSIT_WIDTH.W)))
      }
    }.elsewhen(io.op === 8.U) {  // Greater - 比较并输出较大值
      val greater = Module(new PositGreater(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, MAX_ALIGN_WIDTH, ES))
@@ -768,7 +848,7 @@
      // 直接使用greater模块的posit输出
      for(i <- 0 until MAX_VECTOR_SIZE) {
        when(valid_range(i)) {
-         io.posit_o(i) := Mux(
+         combinationalResponse.posit_o(i) := Mux(
            io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR,
            rawPositNaR,
            Mux(io.posit_i1(i).asSInt >= io.posit_i2(i).asSInt, io.posit_i1(i), io.posit_i2(i))
@@ -797,7 +877,7 @@
      // 直接使用less模块的posit输出
      for(i <- 0 until MAX_VECTOR_SIZE) {
        when(valid_range(i)) {
-         io.posit_o(i) := Mux(
+         combinationalResponse.posit_o(i) := Mux(
            io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR,
            rawPositNaR,
            Mux(io.posit_i1(i).asSInt <= io.posit_i2(i).asSInt, io.posit_i1(i), io.posit_i2(i))
@@ -817,7 +897,7 @@
      
      for (i <- 0 until MAX_VECTOR_SIZE) {
        when (valid_range(i)) {
-         io.int_o(i) := tranInt.io.int_o(i)
+         combinationalResponse.int_o(i) := tranInt.io.int_o(i)
        }
      }
    }
@@ -1115,12 +1195,12 @@
      
      // 根据Outposit信号选择输出格式
      when(io.Outposit) {
-       io.posit_dot_o := Mux(io.Isposit && dotHasRawPositNaR, rawPositNaR,
+       combinationalResponse.posit_dot_o := Mux(io.Isposit && dotHasRawPositNaR, rawPositNaR,
          Mux(dotUsesSequentialP32, sequentialP32Dot(MAX_VECTOR_SIZE), posit_result))
-       io.float_dot_o := 0.U(FLOAT_WIDTH.W)
+       combinationalResponse.float_dot_o := 0.U(FLOAT_WIDTH.W)
      }.otherwise {
-       io.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
-       io.float_dot_o := float_result
+       combinationalResponse.posit_dot_o := 0.U(MAX_POSIT_WIDTH.W)
+       combinationalResponse.float_dot_o := float_result
      }
      
    }.elsewhen(io.op === 6.U){
@@ -1128,7 +1208,7 @@
      val isP32ToP16 = ACTUAL_SRC_POSIT_WIDTH === 32.U && ACTUAL_DST_POSIT_WIDTH === 16.U
      for(i <- 0 until MAX_VECTOR_SIZE) {
        when(valid_range(i) && isP32ToP16) {
-         io.posit_o(i) := p32ToP16.io.posit_o(i)
+         combinationalResponse.posit_o(i) := p32ToP16.io.posit_o(i)
        }
      }
    }.elsewhen(io.op === 7.U){
@@ -1282,31 +1362,53 @@
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
            when(addSubUsesRawP32) {
-             io.posit_o(i) := rawAddSub.io.posit_o(i)
+             combinationalResponse.posit_o(i) := rawAddSub.io.posit_o(i)
            }.elsewhen(io.op === 4.U && (divInputInvalid(i) || divInputInfinite(i))) {
-             io.posit_o(i) := rawPositNaR
+             combinationalResponse.posit_o(i) := rawPositNaR
            }.elsewhen(io.op === 4.U && divInputZero(i)) {
-             io.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
+             combinationalResponse.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
            }.elsewhen(io.Isposit && (io.posit_i1(i) === rawPositNaR || io.posit_i2(i) === rawPositNaR)) {
-             io.posit_o(i) := rawPositNaR
+             combinationalResponse.posit_o(i) := rawPositNaR
            }.elsewhen(io.op === 3.U && io.Isposit && ACTUAL_SRC_POSIT_WIDTH === 32.U &&
              ACTUAL_DST_POSIT_WIDTH === 32.U) {
-             io.posit_o(i) := exactP32Mul.io.posit_o(i)
+             combinationalResponse.posit_o(i) := exactP32Mul.io.posit_o(i)
 
            }.otherwise {
-             io.posit_o(i) := posit_results(i)
+             combinationalResponse.posit_o(i) := posit_results(i)
            }
-           io.float_o(i) := 0.U(FLOAT_WIDTH.W)
+           combinationalResponse.float_o(i) := 0.U(FLOAT_WIDTH.W)
          }
        }
      }.otherwise {
        // 只处理有效范围内的结果
        for(i <- 0 until MAX_VECTOR_SIZE) {
          when(valid_range(i)) {
-           io.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
-           io.float_o(i) := Mux(io.op === 4.U, div_float_results(i), float_results(i))
+           combinationalResponse.posit_o(i) := 0.U(MAX_POSIT_WIDTH.W)
+           combinationalResponse.float_o(i) := Mux(io.op === 4.U, div_float_results(i), float_results(i))
          }
        }
      }
    }
+
+   // Capture the existing bit-exact combinational result only for an accepted
+   // request.  The final assignments below make response data independent of
+   // all live input pins until out_valid && out_ready completes.
+   when(inFire) {
+     response.tag := io.in_tag
+     response.op := io.op
+     response.float_o := combinationalResponse.float_o
+     response.float_dot_o := combinationalResponse.float_dot_o
+     response.posit_o := combinationalResponse.posit_o
+     response.posit_dot_o := combinationalResponse.posit_dot_o
+     response.int_o := combinationalResponse.int_o
+     responseValid := true.B
+   }.elsewhen(responseValid && io.out_ready) {
+     responseValid := false.B
+   }
+
+   io.float_o := response.float_o
+   io.float_dot_o := response.float_dot_o
+   io.posit_o := response.posit_o
+   io.posit_dot_o := response.posit_dot_o
+   io.int_o := response.int_o
  }
