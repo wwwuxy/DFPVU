@@ -1262,6 +1262,110 @@ bool matches(const TestCase& test, const PvuResponse& actual, std::string& reaso
   return true;
 }
 
+void require_match(const TestCase& test, const PvuResponse& actual, const char* phase) {
+  std::string reason;
+  if (!matches(test, actual, reason)) {
+    throw std::runtime_error(std::string(phase) + ": " + reason);
+  }
+}
+
+void run_adjacent_non_division_pipeline(ProtocolDriver& adapter,
+                                        const TestCase& a,
+                                        const TestCase& b) {
+  if (a.request.op == 4 || b.request.op == 4) {
+    throw std::runtime_error("adjacent non-division test received a division request");
+  }
+
+  adapter.reset();
+  adapter.set_out_ready(true);
+  adapter.present(a.request);
+  if (!adapter.in_ready()) throw std::runtime_error("non-division request A was not ready");
+  adapter.advance();
+
+  // The accepted request must cross registered execution boundaries.  A
+  // response here would be the Task 3 accept-edge combinational bypass.
+  if (adapter.out_valid()) {
+    throw std::runtime_error("non-division response bypassed the registered pipeline");
+  }
+
+  adapter.present(b.request);
+  if (!adapter.in_ready()) {
+    throw std::runtime_error("adjacent non-division request B was not accepted at one-per-cycle throughput");
+  }
+  adapter.advance();
+  adapter.withdraw_request();
+
+  const std::array<const TestCase*, 2> expected{{&a, &b}};
+  size_t completed = 0;
+  size_t idle_cycles = 0;
+  bool previous_cycle_completed = false;
+  while (completed < expected.size()) {
+    const bool completing = adapter.out_valid();
+    if (completing) {
+      require_match(*expected.at(completed), adapter.response(),
+                    "adjacent non-division response order");
+      if (completed == 1 && !previous_cycle_completed) {
+        throw std::runtime_error("adjacent non-division responses lost one-per-cycle throughput");
+      }
+      ++completed;
+    } else if (++idle_cycles > 32) {
+      throw std::runtime_error("adjacent non-division requests did not drain");
+    }
+    previous_cycle_completed = completing;
+    adapter.advance();
+  }
+  adapter.set_out_ready(false);
+}
+
+void run_division_busy_backpressure(ProtocolDriver& adapter,
+                                    const TestCase& a,
+                                    const TestCase& b) {
+  if (a.request.op != 4 || b.request.op != 4) {
+    throw std::runtime_error("division busy test requires two division requests");
+  }
+
+  adapter.reset();
+  adapter.set_out_ready(true);
+  adapter.present(a.request);
+  if (!adapter.in_ready()) throw std::runtime_error("division request A was not ready");
+  adapter.advance();
+
+  adapter.present(b.request);
+  if (adapter.in_ready()) {
+    throw std::runtime_error("second division observed in_ready while the division lane was busy");
+  }
+
+  size_t busy_cycles = 0;
+  while (!adapter.out_valid()) {
+    if (adapter.in_ready()) {
+      throw std::runtime_error("division lane dropped busy backpressure before response handoff");
+    }
+    if (++busy_cycles > 32) throw std::runtime_error("division request A did not complete");
+    adapter.advance();
+  }
+  if (busy_cycles == 0) throw std::runtime_error("division lane never entered an observable busy state");
+  require_match(a, adapter.response(), "division response A");
+  if (adapter.in_ready()) {
+    throw std::runtime_error("division lane became ready before response A handoff");
+  }
+
+  adapter.advance();
+  if (!adapter.in_ready()) {
+    throw std::runtime_error("division lane remained backpressured after response A handoff");
+  }
+  adapter.advance();
+  adapter.withdraw_request();
+
+  size_t wait_cycles = 0;
+  while (!adapter.out_valid()) {
+    if (++wait_cycles > 32) throw std::runtime_error("division request B did not complete");
+    adapter.advance();
+  }
+  require_match(b, adapter.response(), "division response B");
+  adapter.advance();
+  adapter.set_out_ready(false);
+}
+
 bool run_backpressure_pop_push(ProtocolDriver& adapter, const TestCase& a, const TestCase& b) {
   std::array<const TestCase*, 2> scoreboard{};
   size_t head = 0;
@@ -1282,6 +1386,11 @@ bool run_backpressure_pop_push(ProtocolDriver& adapter, const TestCase& a, const
   enqueue(a);
   adapter.advance();
   adapter.withdraw_request();
+  size_t a_wait_cycles = 0;
+  while (!adapter.out_valid()) {
+    if (++a_wait_cycles > 32) throw std::runtime_error("A did not reach the response buffer");
+    adapter.advance();
+  }
   expect_front("A response creation");
   const PvuResponse held_a = adapter.response();
 
@@ -1307,6 +1416,11 @@ bool run_backpressure_pop_push(ProtocolDriver& adapter, const TestCase& a, const
   adapter.advance();
   adapter.withdraw_request();
   adapter.set_out_ready(false);
+  size_t b_wait_cycles = 0;
+  while (!adapter.out_valid()) {
+    if (++b_wait_cycles > 32) throw std::runtime_error("B did not reach the response buffer");
+    adapter.advance();
+  }
   expect_front("B response creation");
 
   adapter.set_out_ready(true);
@@ -1330,12 +1444,16 @@ int main(int argc, char** argv) {
   const std::vector<TestCase> tests = build_tests();
   std::map<std::string, std::pair<size_t, size_t>> summary;
   size_t mismatches = 0;
+  run_adjacent_non_division_pipeline(adapter, tests.at(0), tests.at(10));
+  std::cout << "adjacent non-division pipeline: PASS\n";
+  run_division_busy_backpressure(adapter, tests.at(16), tests.at(17));
+  std::cout << "division busy backpressure: PASS\n";
+  adapter.reset();
   run_backpressure_pop_push(adapter, tests.at(0), tests.at(1));
 
   for (const TestCase& test : tests) {
     if (!adapter.in_ready()) throw std::runtime_error("input valid/ready handshake blocked by pending response");
     adapter.send(test.request);
-    if (!adapter.out_valid()) throw std::runtime_error("accepted request produced no response valid");
     const PvuResponse actual = adapter.recv();
     ++summary[test.operation].first;
     std::string reason;
