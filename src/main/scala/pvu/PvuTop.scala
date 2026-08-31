@@ -155,39 +155,114 @@
      val int_o       = Output(Vec(MAX_VECTOR_SIZE, SInt(INT_WIDTH.W)))  // 新增整数输出接口
  })
 
-  // Hold the complete accepted request.  The current Task 3 arithmetic path
-  // remains combinational; this snapshot is the protocol boundary consumed by
-  // the following pipelining task and prevents post-handshake input changes
-  // from becoming architectural state.
+  val inputRequest = Wire(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
+  inputRequest.tag := io.in_tag
+  inputRequest.posit_i1 := io.posit_i1
+  inputRequest.posit_i2 := io.posit_i2
+  inputRequest.op := io.op
+  inputRequest.Isposit := io.Isposit
+  inputRequest.Outposit := io.Outposit
+  inputRequest.float_i := io.float_i
+  inputRequest.float_i2 := io.float_i2
+  inputRequest.float_mode := io.float_mode
+  inputRequest.float_posit := io.float_posit
+  inputRequest.src_posit_width := io.src_posit_width
+  inputRequest.vector_size := io.vector_size
+  inputRequest.dst_posit_width := io.dst_posit_width
+
+  // Fixed-latency non-division pipeline.  A single clock-enable freezes every
+  // boundary when the response buffer is stalled, so no in-flight payload can
+  // be overwritten.  Complete request controls travel beside the response at
+  // every boundary even when the result bits are already determined.
   val request = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
+  val requestValid = RegInit(false.B)
+  val coreRequest = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
+  val coreResponse = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  val coreValid = RegInit(false.B)
+  val normalizeRequest = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
+  val normalizeResponse = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  val normalizeValid = RegInit(false.B)
+  val encodeRequest = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
+  val encodeResponse = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  val encodeValid = RegInit(false.B)
   val response = Reg(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
   val combinationalResponse = Wire(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
   val responseValid = RegInit(false.B)
+
+  // Division owns a dedicated request slot from acceptance through response
+  // handoff.  It is injected into the execution pipeline exactly once and the
+  // slot cannot be overwritten while busy.
+  val divisionRequest = Reg(new PvuRequest(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH))
+  val divisionPending = RegInit(false.B)
+  val divisionBusy = RegInit(false.B)
+
+  val pipelineAdvance = !responseValid || io.out_ready
+  val pipelineEmpty = !requestValid && !coreValid && !normalizeValid &&
+    !encodeValid && !responseValid && !divisionPending
+  val inputIsDivision = io.op === 4.U
+  io.in_ready := !divisionBusy && pipelineAdvance &&
+    Mux(inputIsDivision, pipelineEmpty, true.B)
   val inFire = io.in_valid && io.in_ready
+  val nonDivisionFire = inFire && !inputIsDivision
+  val divisionFire = inFire && inputIsDivision
 
-  // A one-entry response buffer can be replaced in the same cycle in which
-  // its prior value is consumed.  Otherwise upstream sees backpressure.
-  io.in_ready := !responseValid || io.out_ready
+  val executedResponse = Wire(new PvuResponse(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE, FLOAT_WIDTH, INT_WIDTH))
+  executedResponse := combinationalResponse
+  executedResponse.tag := request.tag
+  executedResponse.op := request.op
 
-  when(inFire) {
-    request.tag := io.in_tag
-    request.posit_i1 := io.posit_i1
-    request.posit_i2 := io.posit_i2
-    request.op := io.op
-    request.Isposit := io.Isposit
-    request.Outposit := io.Outposit
-    request.float_i := io.float_i
-    request.float_i2 := io.float_i2
-    request.float_mode := io.float_mode
-    request.float_posit := io.float_posit
-    request.src_posit_width := io.src_posit_width
-    request.vector_size := io.vector_size
-    request.dst_posit_width := io.dst_posit_width
+  when(pipelineAdvance) {
+    responseValid := encodeValid
+    when(encodeValid) {
+      response := encodeResponse
+    }
+
+    encodeValid := normalizeValid
+    when(normalizeValid) {
+      encodeRequest := normalizeRequest
+      encodeResponse := normalizeResponse
+    }
+
+    normalizeValid := coreValid
+    when(coreValid) {
+      normalizeRequest := coreRequest
+      normalizeResponse := coreResponse
+    }
+
+    coreValid := requestValid
+    when(requestValid) {
+      coreRequest := request
+      coreResponse := executedResponse
+    }
+
+    requestValid := divisionPending || nonDivisionFire
+    when(divisionPending) {
+      request := divisionRequest
+    }.elsewhen(nonDivisionFire) {
+      request := inputRequest
+    }
+  }
+
+  when(divisionFire) {
+    divisionRequest := inputRequest
+    divisionPending := true.B
+    divisionBusy := true.B
+  }.elsewhen(pipelineAdvance && divisionPending) {
+    divisionPending := false.B
+  }
+
+  when(responseValid && io.out_ready && response.op === 4.U) {
+    divisionBusy := false.B
   }
 
   io.out_valid := responseValid
   io.out_tag := response.tag
   io.out_op := response.op
+
+  // From this point through final result selection, every historic io operand
+  // reference resolves to the accepted request register, never to live pins.
+  locally {
+  val io = request
 
   // 添加decode模块实例
   val decode1 = Module(new PositDecode(LIMITED_POSIT_WIDTH, LIMITED_VECTOR_SIZE, ES))
@@ -1390,25 +1465,11 @@
      }
    }
 
-   // Capture the existing bit-exact combinational result only for an accepted
-   // request.  The final assignments below make response data independent of
-   // all live input pins until out_valid && out_ready completes.
-   when(inFire) {
-     response.tag := io.in_tag
-     response.op := io.op
-     response.float_o := combinationalResponse.float_o
-     response.float_dot_o := combinationalResponse.float_dot_o
-     response.posit_o := combinationalResponse.posit_o
-     response.posit_dot_o := combinationalResponse.posit_dot_o
-     response.int_o := combinationalResponse.int_o
-     responseValid := true.B
-   }.elsewhen(responseValid && io.out_ready) {
-     responseValid := false.B
-   }
+  } // captured-request execution scope
 
-   io.float_o := response.float_o
-   io.float_dot_o := response.float_dot_o
-   io.posit_o := response.posit_o
-   io.posit_dot_o := response.posit_dot_o
-   io.int_o := response.int_o
+  io.float_o := response.float_o
+  io.float_dot_o := response.float_dot_o
+  io.posit_o := response.posit_o
+  io.posit_dot_o := response.posit_dot_o
+  io.int_o := response.int_o
  }
