@@ -1303,6 +1303,33 @@ void run_source_structural_guards() {
       throw std::runtime_error("raw P32 pipeline payload is missing " + token);
     }
   }
+
+  const auto count_instances = [](const std::string& text, const std::string& token) {
+    size_t count = 0;
+    size_t offset = 0;
+    while ((offset = text.find(token, offset)) != std::string::npos) {
+      ++count;
+      offset += token.size();
+    }
+    return count;
+  };
+  const size_t source_dividers = count_instances(source, "new Div(");
+  if (source_dividers != 1) {
+    throw std::runtime_error("PvuTop.scala must elaborate exactly one divider, found " +
+                             std::to_string(source_dividers));
+  }
+
+  std::ifstream rtl_file("vsrc/PvuTop.sv");
+  if (!rtl_file) {
+    throw std::runtime_error("could not open generated PvuTop.sv for divider guard");
+  }
+  const std::string rtl((std::istreambuf_iterator<char>(rtl_file)),
+                        std::istreambuf_iterator<char>());
+  const size_t rtl_dividers = count_instances(rtl, "\n  Div ");
+  if (rtl_dividers != 1) {
+    throw std::runtime_error("generated PvuTop.sv must instantiate exactly one divider, found " +
+                             std::to_string(rtl_dividers));
+  }
 }
 
 void run_registered_boundary_latency(ProtocolDriver& adapter, const TestCase& test) {
