@@ -1269,6 +1269,42 @@ void require_match(const TestCase& test, const PvuResponse& actual, const char* 
   }
 }
 
+
+void run_source_structural_guards() {
+  std::ifstream source_file("src/main/scala/pvu/PvuTop.scala");
+  if (!source_file) {
+    throw std::runtime_error("could not open PvuTop.scala for structural guard");
+  }
+
+  const std::string source((std::istreambuf_iterator<char>(source_file)),
+                           std::istreambuf_iterator<char>());
+  const std::string encode_marker = "val encodedNext = Wire";
+  const std::string division_marker = "val executedDivision = Wire";
+  const size_t encode_begin = source.find(encode_marker);
+  const size_t encode_end = source.find(division_marker);
+  if (encode_begin == std::string::npos || encode_end == std::string::npos ||
+      encode_end <= encode_begin) {
+    throw std::runtime_error("could not locate PvuTop encode stage for structural guard");
+  }
+
+  const std::string encode_stage = source.substr(encode_begin, encode_end - encode_begin);
+  const std::array<std::string, 3> forbidden{
+      "new PositDecode", "new PositAddSub", "new ExactP32Mul"};
+  for (const std::string& token : forbidden) {
+    if (encode_stage.find(token) != std::string::npos) {
+      throw std::runtime_error("raw P32 encode stage still recomputes through " + token);
+    }
+  }
+
+  const std::array<std::string, 5> required{
+      "rawScale", "rawMagnitude", "rawAligned", "rawLowerSticky", "rawBypassValue"};
+  for (const std::string& token : required) {
+    if (source.find(token) == std::string::npos) {
+      throw std::runtime_error("raw P32 pipeline payload is missing " + token);
+    }
+  }
+}
+
 void run_registered_boundary_latency(ProtocolDriver& adapter, const TestCase& test) {
   if (test.request.op == 4) {
     throw std::runtime_error("registered boundary latency test requires a non-division request");
@@ -1391,16 +1427,20 @@ void run_division_busy_backpressure(ProtocolDriver& adapter,
                     "division/non-division ordered response");
       ++completed;
     }
-    if (accepting_b && completed != older.size()) {
-      throw std::runtime_error("division B was accepted before all older responses completed");
-    }
     adapter.advance();
     b_accepted = accepting_b;
     if (++cycles > 64) throw std::runtime_error("division B never regained safe lane capacity");
   }
   adapter.withdraw_request();
-  if (completed != older.size()) {
-    throw std::runtime_error("division B acceptance bypassed an older response");
+  // B may reserve the idle divider before C drains, but the barrier must keep
+  // every older response ahead of B at the output.
+  while (completed != older.size()) {
+    if (adapter.out_valid()) {
+      require_match(*older.at(completed), adapter.response(),
+                    "division/non-division ordered response after B admission");
+      ++completed;
+    }
+    adapter.advance();
   }
 
   size_t wait_cycles = 0;
@@ -1410,6 +1450,103 @@ void run_division_busy_backpressure(ProtocolDriver& adapter,
   }
   require_match(b, adapter.response(), "division response B");
   adapter.advance();
+  adapter.set_out_ready(false);
+}
+
+void run_non_division_then_division(ProtocolDriver& adapter,
+                                    const TestCase& non_division,
+                                    const TestCase& division) {
+  if (non_division.request.op == 4 || division.request.op != 4) {
+    throw std::runtime_error("reverse division concurrency test requires non-div A and div B");
+  }
+
+  adapter.reset();
+  adapter.set_out_ready(true);
+  adapter.present(non_division.request);
+  if (!adapter.in_ready()) throw std::runtime_error("non-division A was not ready");
+  adapter.advance();
+  adapter.withdraw_request();
+
+  // B must be admitted while A occupies the fixed lane because the division
+  // lane is still idle.  The response order must nevertheless remain A then B.
+  adapter.present(division.request);
+  if (!adapter.in_ready()) {
+    throw std::runtime_error("idle division lane was blocked by fixed-lane traffic");
+  }
+  adapter.advance();
+  adapter.withdraw_request();
+
+  const std::array<const TestCase*, 2> expected{{&non_division, &division}};
+  size_t completed = 0;
+  size_t cycles = 0;
+  while (completed < expected.size()) {
+    if (adapter.out_valid()) {
+      require_match(*expected.at(completed), adapter.response(),
+                    "non-division/division ordered response");
+      ++completed;
+    }
+    adapter.advance();
+    if (++cycles > 64) throw std::runtime_error("non-division/division requests did not drain");
+  }
+  adapter.set_out_ready(false);
+}
+
+
+void run_stalled_fixed_lane_then_division(ProtocolDriver& adapter,
+                                          const TestCase& a,
+                                          const TestCase& b,
+                                          const TestCase& division) {
+  if (a.request.op == 4 || b.request.op == 4 || division.request.op != 4) {
+    throw std::runtime_error("stalled reverse concurrency test requires fixed A/B and division C");
+  }
+
+  adapter.reset();
+  adapter.set_out_ready(false);
+  adapter.present(a.request);
+  if (!adapter.in_ready()) throw std::runtime_error("fixed request A was not ready");
+  adapter.advance();
+
+  adapter.present(b.request);
+  if (!adapter.in_ready()) throw std::runtime_error("fixed request B was not ready");
+  adapter.advance();
+  adapter.withdraw_request();
+
+  size_t fill_cycles = 0;
+  while (!adapter.out_valid()) {
+    if (++fill_cycles > 16) throw std::runtime_error("fixed request A never reached stalled output");
+    adapter.advance();
+  }
+  const PvuResponse held_a = adapter.response();
+
+  // Keep A stalled long enough for B to occupy the fixed encode stage.  The
+  // divider is still idle, so it must be able to capture C independently.
+  for (size_t cycle = 0; cycle < 2; ++cycle) {
+    if (!adapter.out_valid() || !ProtocolDriver::same_response(held_a, adapter.response())) {
+      throw std::runtime_error("fixed response A was not stable during output stall");
+    }
+    adapter.advance();
+  }
+
+  adapter.present(division.request);
+  if (!adapter.in_ready()) {
+    throw std::runtime_error("idle divider was blocked by stalled fixed-lane output");
+  }
+  adapter.advance();
+  adapter.withdraw_request();
+
+  const std::array<const TestCase*, 3> expected{{&a, &b, &division}};
+  size_t completed = 0;
+  adapter.set_out_ready(true);
+  size_t cycles = 0;
+  while (completed < expected.size()) {
+    if (adapter.out_valid()) {
+      require_match(*expected.at(completed), adapter.response(),
+                    "stalled fixed-lane/division ordered response");
+      ++completed;
+    }
+    adapter.advance();
+    if (++cycles > 96) throw std::runtime_error("stalled fixed-lane/division requests did not drain");
+  }
   adapter.set_out_ready(false);
 }
 
@@ -1496,12 +1633,18 @@ int main(int argc, char** argv) {
   const std::vector<TestCase> tests = build_tests();
   std::map<std::string, std::pair<size_t, size_t>> summary;
   size_t mismatches = 0;
+  run_source_structural_guards();
+  std::cout << "raw P32 staged arithmetic structural guard: PASS\n";
   run_registered_boundary_latency(adapter, tests.at(0));
   std::cout << "registered decode/core/reduce/normalize/encode latency: PASS\n";
   run_adjacent_non_division_pipeline(adapter, tests.at(0), tests.at(10));
   std::cout << "adjacent non-division pipeline: PASS\n";
   run_division_busy_backpressure(adapter, tests.at(16), tests.at(17), tests.at(10));
   std::cout << "division busy with non-division concurrency: PASS\n";
+  run_non_division_then_division(adapter, tests.at(10), tests.at(16));
+  std::cout << "non-division then division concurrency: PASS\n";
+  run_stalled_fixed_lane_then_division(adapter, tests.at(0), tests.at(10), tests.at(16));
+  std::cout << "stalled fixed-lane then division concurrency: PASS\n";
   adapter.reset();
   run_backpressure_pop_push(adapter, tests.at(0), tests.at(1));
 
