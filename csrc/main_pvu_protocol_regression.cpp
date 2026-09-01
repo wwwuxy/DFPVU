@@ -4,6 +4,7 @@
 
 #include <verilated.h>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1269,6 +1270,68 @@ void require_match(const TestCase& test, const PvuResponse& actual, const char* 
   }
 }
 
+std::string strip_comments_and_strings(const std::string& text) {
+  std::string result = text;
+  enum class State { kCode, kLineComment, kBlockComment, kString, kChar };
+  State state = State::kCode;
+  bool escaped = false;
+  for (size_t i = 0; i < result.size(); ++i) {
+    const char c = result[i];
+    if (state == State::kCode) {
+      if (c == '/' && i + 1 < result.size() && result[i + 1] == '/') {
+        result[i] = result[i + 1] = ' '; state = State::kLineComment; ++i;
+      } else if (c == '/' && i + 1 < result.size() && result[i + 1] == '*') {
+        result[i] = result[i + 1] = ' '; state = State::kBlockComment; ++i;
+      } else if (c == '"') { result[i] = ' '; state = State::kString;
+      } else if (c == '\'') { result[i] = ' '; state = State::kChar; }
+    } else if (state == State::kLineComment) {
+      if (c == '\n') state = State::kCode; else result[i] = ' ';
+    } else if (state == State::kBlockComment) {
+      if (c == '*' && i + 1 < result.size() && result[i + 1] == '/') {
+        result[i] = result[i + 1] = ' '; state = State::kCode; ++i;
+      } else if (c != '\n') result[i] = ' ';
+    } else {
+      if (escaped) { escaped = false; if (c != '\n') result[i] = ' '; }
+      else if (c == '\\') { escaped = true; result[i] = ' '; }
+      else if ((state == State::kString && c == '"') ||
+               (state == State::kChar && c == '\'')) { result[i] = ' '; state = State::kCode; }
+      else if (c != '\n') result[i] = ' ';
+    }
+  }
+  return result;
+}
+
+size_t count_scala_div_instances(const std::string& text) {
+  const std::string code = strip_comments_and_strings(text);
+  size_t count = 0;
+  for (size_t i = 0; i + 3 < code.size(); ++i) {
+    if (code.compare(i, 3, "new") != 0 || (i && std::isalnum(static_cast<unsigned char>(code[i - 1])))) continue;
+    size_t j = i + 3;
+    while (j < code.size() && std::isspace(static_cast<unsigned char>(code[j]))) ++j;
+    if (code.compare(j, 3, "Div") != 0) continue;
+    j += 3; while (j < code.size() && std::isspace(static_cast<unsigned char>(code[j]))) ++j;
+    if (j < code.size() && code[j] == '(') ++count;
+  }
+  return count;
+}
+
+size_t count_rtl_div_instances(const std::string& text) {
+  const std::string code = strip_comments_and_strings(text);
+  size_t count = 0;
+  for (size_t i = 0; i + 3 < code.size(); ++i) {
+    if (code.compare(i, 3, "Div") != 0) continue;
+    size_t j = i + 3;
+    if (j < code.size() && (std::isalnum(static_cast<unsigned char>(code[j])) || code[j] == '_')) continue;
+    while (j < code.size() && std::isspace(static_cast<unsigned char>(code[j]))) ++j;
+    const size_t name_begin = j;
+    while (j < code.size() && (std::isalnum(static_cast<unsigned char>(code[j])) || code[j] == '_')) ++j;
+    if (j == name_begin) continue;
+    while (j < code.size() && std::isspace(static_cast<unsigned char>(code[j]))) ++j;
+    if (j < code.size() && code[j] == '(') ++count;
+  }
+  return count;
+}
+
 
 void run_source_structural_guards() {
   std::ifstream source_file("src/main/scala/pvu/PvuTop.scala");
@@ -1304,16 +1367,15 @@ void run_source_structural_guards() {
     }
   }
 
-  const auto count_instances = [](const std::string& text, const std::string& token) {
-    size_t count = 0;
-    size_t offset = 0;
-    while ((offset = text.find(token, offset)) != std::string::npos) {
-      ++count;
-      offset += token.size();
-    }
-    return count;
-  };
-  const size_t source_dividers = count_instances(source, "new Div(");
+  const std::string source_guard_fixture =
+      "// new Div( in a comment\n"
+      "val text = \"new Div( in a string\"\n"
+      "Module(new\n  Div (io))";
+  if (count_scala_div_instances(source_guard_fixture) != 1 ||
+      count_scala_div_instances(source_guard_fixture + "\nModule(new Div (io2))") != 2) {
+    throw std::runtime_error("Scala divider guard fixture did not exercise whitespace/comment variants");
+  }
+  const size_t source_dividers = count_scala_div_instances(source);
   if (source_dividers != 1) {
     throw std::runtime_error("PvuTop.scala must elaborate exactly one divider, found " +
                              std::to_string(source_dividers));
@@ -1325,7 +1387,14 @@ void run_source_structural_guards() {
   }
   const std::string rtl((std::istreambuf_iterator<char>(rtl_file)),
                         std::istreambuf_iterator<char>());
-  const size_t rtl_dividers = count_instances(rtl, "\n  Div ");
+  const std::string rtl_guard_fixture =
+      "// Div fake (\nmodule Div (input x);\nDiv\n  divInst (x);\n"
+      "\"Div fake (\"";
+  if (count_rtl_div_instances(rtl_guard_fixture) != 1 ||
+      count_rtl_div_instances(rtl_guard_fixture + "\nDiv divInst2 (x);") != 2) {
+    throw std::runtime_error("RTL divider guard fixture did not exclude definitions/comments/strings");
+  }
+  const size_t rtl_dividers = count_rtl_div_instances(rtl);
   if (rtl_dividers != 1) {
     throw std::runtime_error("generated PvuTop.sv must instantiate exactly one divider, found " +
                              std::to_string(rtl_dividers));
