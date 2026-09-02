@@ -49,6 +49,24 @@ menu "RESNET_TEST"
         default n
         help
             Enable Posit32 to IEEE-754 FP32 conversion test.
+
+    config RESNET_POSIT32_TO_FP4
+        bool "resnet_posit32_to_fp4_precision_batch_test"
+        default n
+        help
+            Enable Posit32 to FP4 batch conversion and precision-loss report.
+
+    config RESNET_POSIT32_TO_FP8
+        bool "resnet_posit32_to_fp8_precision_batch_test"
+        default n
+        help
+            Enable Posit32 to FP8 batch conversion and precision-loss report.
+
+    config RESNET_POSIT32_TO_FP16
+        bool "resnet_posit32_to_fp16_precision_batch_test"
+        default n
+        help
+            Enable Posit32 to FP16 batch conversion and precision-loss report.
             
     config RESNET_GREATER_P32
         bool "resnet_greater_p32_test"
