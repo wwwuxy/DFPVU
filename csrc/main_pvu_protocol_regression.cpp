@@ -1,7 +1,9 @@
 #include "../config.h"
 
-#if defined(CONFIG_PVU_PROTOCOL_REGRESSION) && CONFIG_PVU_PROTOCOL_REGRESSION
+#if (defined(CONFIG_PVU_PROTOCOL_REGRESSION) && CONFIG_PVU_PROTOCOL_REGRESSION) || \
+    (defined(CONFIG_PVU_MAC_REGRESSION) && CONFIG_PVU_MAC_REGRESSION)
 
+#include <algorithm>
 #include <verilated.h>
 #include <array>
 #include <cctype>
@@ -49,6 +51,7 @@ struct PvuRequest {
   uint8_t vector_size = kLanes;
   std::array<uint32_t, kLanes> posit_i1{};
   std::array<uint32_t, kLanes> posit_i2{};
+  uint32_t posit_i3 = 0;
   std::array<uint64_t, kLanes> float_i{};
   std::array<uint64_t, kLanes> float_i2{};
 };
@@ -126,6 +129,17 @@ uint32_t ref_dot(const std::array<uint32_t, kLanes>& lhs,
     accumulator = p32_mulAdd(posit(lhs[lane]), posit(rhs[lane]), accumulator);
   }
   return bits(accumulator);
+}
+
+uint32_t ref_mac(const std::array<uint32_t, kLanes>& lhs,
+                 const std::array<uint32_t, kLanes>& rhs, uint32_t accumulator,
+                 uint8_t vector_size) {
+  const size_t active_lanes = vector_size == 0 ? kLanes :
+    (static_cast<size_t>(vector_size) < kLanes ? static_cast<size_t>(vector_size) : kLanes);
+  for (size_t lane = 0; lane < active_lanes; ++lane) {
+    accumulator = bits(p32_mulAdd(posit(lhs[lane]), posit(rhs[lane]), posit(accumulator)));
+  }
+  return accumulator;
 }
 
 struct FpFormat { uint8_t exponent_bits; uint8_t fraction_bits; };
@@ -231,7 +245,9 @@ PvuResponse expected_for(const PvuRequest& request, ResultKind kind) {
       }
       break;
     case ResultKind::kPositDot:
-      response.posit_dot = ref_dot(request.posit_i1, request.posit_i2, request.vector_size);
+      response.posit_dot = request.op == 11
+        ? ref_mac(request.posit_i1, request.posit_i2, request.posit_i3, request.vector_size)
+        : ref_dot(request.posit_i1, request.posit_i2, request.vector_size);
       break;
     case ResultKind::kFloatVector:
       for (size_t lane = 0; lane < kLanes; ++lane) {
@@ -321,6 +337,7 @@ class ProtocolDriver {
     dut_->io_posit_i1_2 = request.posit_i1[2]; dut_->io_posit_i1_3 = request.posit_i1[3];
     dut_->io_posit_i2_0 = request.posit_i2[0]; dut_->io_posit_i2_1 = request.posit_i2[1];
     dut_->io_posit_i2_2 = request.posit_i2[2]; dut_->io_posit_i2_3 = request.posit_i2[3];
+    dut_->io_posit_i3 = request.posit_i3;
     dut_->io_float_i_0 = request.float_i[0]; dut_->io_float_i_1 = request.float_i[1];
     dut_->io_float_i_2 = request.float_i[2]; dut_->io_float_i_3 = request.float_i[3];
     dut_->io_float_i2_0 = request.float_i2[0]; dut_->io_float_i2_1 = request.float_i2[1];
@@ -1000,6 +1017,55 @@ std::vector<TestCase> build_tests() {
     add_case(tests, "op5", "inactive-lane-nar-is-ignored", request, ResultKind::kPositDot);
   }
 
+  {
+    PvuRequest request = base_request(tag++, 11);
+    request.vector_size = 2;
+    request.posit_i1 = {kTwo, kNegOne, kNaR, kNaR};
+    request.posit_i2 = {kTwo, kTwo, kNaR, kNaR};
+    request.posit_i3 = kOne;
+    add_case(tests, "op11", "initial-accumulator-and-active-lanes", request,
+             ResultKind::kPositDot);
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 11);
+    request.posit_i1 = {kTwo, kNegOne, kHalf, kNegHalf};
+    request.posit_i2 = {kTwo, kTwo, kTwo, kTwo};
+    request.posit_i3 = 0;
+    add_case(tests, "op11", "zero-accumulator-matches-dot", request, ResultKind::kPositDot);
+  }
+
+  {
+    const std::array<uint32_t, kLanes> lhs{{0xde3d9385u, 0xef1fc26du, 0x9cd48b28u, 0x1f35fc38u}};
+    const std::array<uint32_t, kLanes> rhs{{0x369800e1u, 0xdbd84b1cu, 0x9cd48b28u, 0x6b7dbfbcu}};
+    for (size_t prefix = 1; prefix <= kLanes; ++prefix) {
+      PvuRequest request = base_request(tag++, 11);
+      request.vector_size = static_cast<uint8_t>(prefix);
+      request.posit_i1 = lhs;
+      request.posit_i2 = rhs;
+      request.posit_i3 = kNegOne;
+      add_case(tests, "op11", "active-prefix-" + std::to_string(prefix), request,
+               ResultKind::kPositDot);
+    }
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 11);
+    request.vector_size = 1;
+    request.posit_i1 = {kOne, kNaR, kNaR, kNaR};
+    request.posit_i2 = {kTwo, kNaR, kNaR, kNaR};
+    request.posit_i3 = kNegOne;
+    add_case(tests, "op11", "inactive-lane-nar-is-ignored", request, ResultKind::kPositDot);
+  }
+
+  {
+    PvuRequest request = base_request(tag++, 11);
+    request.posit_i1 = repeat(kOne);
+    request.posit_i2 = repeat(kOne);
+    request.posit_i3 = kNaR;
+    add_case(tests, "op11", "accumulator-nar", request, ResultKind::kPositDot);
+  }
+
   for (size_t lane = 0; lane < kLanes; ++lane) {
     PvuRequest lhs_nar = base_request(tag++, 5);
     lhs_nar.posit_i1 = repeat(kOne);
@@ -1012,6 +1078,22 @@ std::vector<TestCase> build_tests() {
     rhs_nar.posit_i2 = repeat(kOne);
     rhs_nar.posit_i2[lane] = kNaR;
     add_case(tests, "op5", "NaR-rhs-lane-" + std::to_string(lane), rhs_nar, ResultKind::kPositDot);
+
+    PvuRequest mac_lhs_nar = base_request(tag++, 11);
+    mac_lhs_nar.posit_i1 = repeat(kOne);
+    mac_lhs_nar.posit_i2 = repeat(kOne);
+    mac_lhs_nar.posit_i3 = kOne;
+    mac_lhs_nar.posit_i1[lane] = kNaR;
+    add_case(tests, "op11", "NaR-lhs-lane-" + std::to_string(lane), mac_lhs_nar,
+             ResultKind::kPositDot);
+
+    PvuRequest mac_rhs_nar = base_request(tag++, 11);
+    mac_rhs_nar.posit_i1 = repeat(kOne);
+    mac_rhs_nar.posit_i2 = repeat(kOne);
+    mac_rhs_nar.posit_i3 = kOne;
+    mac_rhs_nar.posit_i2[lane] = kNaR;
+    add_case(tests, "op11", "NaR-rhs-lane-" + std::to_string(lane), mac_rhs_nar,
+             ResultKind::kPositDot);
   }
 
   const std::vector<uint32_t> activations = load_words("test_src/posit_activations.bin", 24);
@@ -1231,6 +1313,25 @@ std::vector<TestCase> build_tests() {
     add_case(tests, "op5", "fused-random-0xd07f32-" + std::to_string(sample),
              request, ResultKind::kPositDot);
   }
+
+  std::mt19937 mac_seeded(0x4d414331u);
+  for (size_t sample = 0; sample < 512; ++sample) {
+    PvuRequest request = base_request(tag++, 11);
+    request.vector_size = static_cast<uint8_t>((sample % kLanes) + 1);
+    request.posit_i3 = mac_seeded();
+    for (size_t lane = 0; lane < kLanes; ++lane) {
+      request.posit_i1[lane] = mac_seeded();
+      request.posit_i2[lane] = mac_seeded();
+    }
+    add_case(tests, "op11", "fused-random-0x4d414331-" + std::to_string(sample),
+             request, ResultKind::kPositDot);
+  }
+
+#if defined(CONFIG_PVU_MAC_REGRESSION) && CONFIG_PVU_MAC_REGRESSION
+  tests.erase(std::remove_if(tests.begin(), tests.end(), [](const TestCase& test) {
+    return test.request.op != 11;
+  }), tests.end());
+#endif
 
   return tests;
 }
@@ -1729,20 +1830,32 @@ int main(int argc, char** argv) {
   const std::vector<TestCase> tests = build_tests();
   std::map<std::string, std::pair<size_t, size_t>> summary;
   size_t mismatches = 0;
+  std::vector<const TestCase*> non_division_tests;
+  std::vector<const TestCase*> division_tests;
+  for (const TestCase& test : tests) {
+    (test.request.op == 4 ? division_tests : non_division_tests).push_back(&test);
+  }
+  if (non_division_tests.size() < 2) {
+    throw std::runtime_error("protocol regression requires two non-division requests");
+  }
   run_source_structural_guards();
   std::cout << "raw P32 staged arithmetic structural guard: PASS\n";
-  run_registered_boundary_latency(adapter, tests.at(0));
+  run_registered_boundary_latency(adapter, *non_division_tests.at(0));
   std::cout << "registered decode/core/reduce/normalize/encode latency: PASS\n";
-  run_adjacent_non_division_pipeline(adapter, tests.at(0), tests.at(10));
+  run_adjacent_non_division_pipeline(adapter, *non_division_tests.at(0), *non_division_tests.at(1));
   std::cout << "adjacent non-division pipeline: PASS\n";
-  run_division_busy_backpressure(adapter, tests.at(16), tests.at(17), tests.at(10));
-  std::cout << "division busy with non-division concurrency: PASS\n";
-  run_non_division_then_division(adapter, tests.at(10), tests.at(16));
-  std::cout << "non-division then division concurrency: PASS\n";
-  run_stalled_fixed_lane_then_division(adapter, tests.at(0), tests.at(10), tests.at(16));
-  std::cout << "stalled fixed-lane then division concurrency: PASS\n";
+  if (division_tests.size() >= 2) {
+    run_division_busy_backpressure(adapter, *division_tests.at(0), *division_tests.at(1),
+                                   *non_division_tests.at(0));
+    std::cout << "division busy with non-division concurrency: PASS\n";
+    run_non_division_then_division(adapter, *non_division_tests.at(0), *division_tests.at(0));
+    std::cout << "non-division then division concurrency: PASS\n";
+    run_stalled_fixed_lane_then_division(adapter, *non_division_tests.at(0),
+                                         *non_division_tests.at(1), *division_tests.at(0));
+    std::cout << "stalled fixed-lane then division concurrency: PASS\n";
+  }
   adapter.reset();
-  run_backpressure_pop_push(adapter, tests.at(0), tests.at(1));
+  run_backpressure_pop_push(adapter, *non_division_tests.at(0), *non_division_tests.at(1));
 
   for (const TestCase& test : tests) {
     if (!adapter.in_ready()) throw std::runtime_error("input valid/ready handshake blocked by pending response");
