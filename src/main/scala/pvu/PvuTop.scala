@@ -33,6 +33,7 @@
    val tag = UInt(32.W)
    val posit_i1 = Vec(maxVectorSize, UInt(maxPositWidth.W))
    val posit_i2 = Vec(maxVectorSize, UInt(maxPositWidth.W))
+   val posit_i3 = UInt(maxPositWidth.W)
    val op = UInt(4.W)
    val Isposit = Bool()
    val Outposit = Bool()
@@ -469,6 +470,7 @@ class PvuDivisionCore(
      // 输入Posit向量
      val posit_i1 = Input(Vec(MAX_VECTOR_SIZE, UInt(MAX_POSIT_WIDTH.W)))
      val posit_i2 = Input(Vec(MAX_VECTOR_SIZE, UInt(MAX_POSIT_WIDTH.W)))
+     val posit_i3 = Input(UInt(MAX_POSIT_WIDTH.W))  // MAC 初始累加值
      val op       = Input(UInt(4.W))  // 操作码位宽从3位改为4位，以支持更多操作
      
      // 是否是posit数据的控制信号
@@ -501,6 +503,7 @@ class PvuDivisionCore(
   inputRequest.tag := io.in_tag
   inputRequest.posit_i1 := io.posit_i1
   inputRequest.posit_i2 := io.posit_i2
+  inputRequest.posit_i3 := io.posit_i3
   inputRequest.op := io.op
   inputRequest.Isposit := io.Isposit
   inputRequest.Outposit := io.Outposit
@@ -1668,11 +1671,12 @@ class PvuDivisionCore(
   val decodedDstWidth = Mux(decodedRequest.dst_posit_width === 0.U,
     decodedSrcWidth, decodedRequest.dst_posit_width)
   val decodedRawP32Dot = decodedRequest.Isposit && decodedRequest.Outposit &&
-    decodedRequest.op === 5.U && decodedSrcWidth === 32.U && decodedDstWidth === 32.U
+    (decodedRequest.op === 5.U || decodedRequest.op === 11.U) &&
+      decodedSrcWidth === 32.U && decodedDstWidth === 32.U
   val rawDotFmaCore = Module(new Posit32MulAdd(SRC_EXP_WIDTH_MAX))
   rawDotFmaCore.io.multiplicand_i := decodedRequest.posit_i1(0)
   rawDotFmaCore.io.multiplier_i := decodedRequest.posit_i2(0)
-  rawDotFmaCore.io.accumulator_i := 0.U
+  rawDotFmaCore.io.accumulator_i := Mux(decodedRequest.op === 11.U, decodedRequest.posit_i3, 0.U)
 
   val coreNext = Wire(new PvuCorePayload(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE,
     FLOAT_WIDTH, INT_WIDTH, SRC_EXP_WIDTH_MAX, PIPE_CORE_FRAC_WIDTH, PIPE_PRODUCT_WIDTH))
@@ -1811,7 +1815,8 @@ class PvuDivisionCore(
   val coreDstWidth = Mux(corePayload.request.dst_posit_width === 0.U,
     coreSrcWidth, corePayload.request.dst_posit_width)
   val coreRawP32Dot = corePayload.request.Isposit && corePayload.request.Outposit &&
-    corePayload.request.op === 5.U && coreSrcWidth === 32.U && coreDstWidth === 32.U
+    (corePayload.request.op === 5.U || corePayload.request.op === 11.U) &&
+      coreSrcWidth === 32.U && coreDstWidth === 32.U
   val coreRawP32VectorArithmetic = corePayload.request.Isposit && corePayload.request.Outposit &&
     corePayload.request.op >= 1.U && corePayload.request.op <= 3.U &&
     coreSrcWidth === 32.U && coreDstWidth === 32.U
@@ -1901,7 +1906,8 @@ class PvuDivisionCore(
   val reducedDstWidth = Mux(reducedPayload.request.dst_posit_width === 0.U,
     reducedSrcWidth, reducedPayload.request.dst_posit_width)
   val reducedRawP32Dot = reducedPayload.request.Isposit && reducedPayload.request.Outposit &&
-    reducedPayload.request.op === 5.U && reducedSrcWidth === 32.U && reducedDstWidth === 32.U
+    (reducedPayload.request.op === 5.U || reducedPayload.request.op === 11.U) &&
+      reducedSrcWidth === 32.U && reducedDstWidth === 32.U
   val reducedRawP32VectorArithmetic = reducedPayload.request.Isposit && reducedPayload.request.Outposit &&
     reducedPayload.request.op >= 1.U && reducedPayload.request.op <= 3.U &&
     reducedSrcWidth === 32.U && reducedDstWidth === 32.U
@@ -1992,7 +1998,8 @@ class PvuDivisionCore(
     normalizedPayload.request.op >= 1.U && normalizedPayload.request.op <= 3.U &&
     normalizedSrcWidth === 32.U && normalizedDstWidth === 32.U
   val rawP32Dot = normalizedPayload.request.Isposit && normalizedPayload.request.Outposit &&
-    normalizedPayload.request.op === 5.U && normalizedSrcWidth === 32.U && normalizedDstWidth === 32.U
+    (normalizedPayload.request.op === 5.U || normalizedPayload.request.op === 11.U) &&
+      normalizedSrcWidth === 32.U && normalizedDstWidth === 32.U
   val encodeRawP32NaR = (BigInt(1) << (RAW_P32_WIDTH - 1)).U(MAX_POSIT_WIDTH.W)
   val encodeRawP32MaxPos = "h7fffffff".U(MAX_POSIT_WIDTH.W)
   val encodeRawP32MinPos = 1.U(MAX_POSIT_WIDTH.W)
@@ -2109,7 +2116,10 @@ class PvuDivisionCore(
         normalizedPayload.request.posit_i2(lane) === encodeRawPositNaR)
   }.reduce(_ || _)
   when(rawP32Dot) {
-    encodedNext.posit_dot_o := Mux(rawDotHasNaR, encodeRawPositNaR, rawDotAfterEncode)
+    val macAccumulatorIsNaR = normalizedPayload.request.op === 11.U &&
+      normalizedPayload.request.posit_i3 === encodeRawPositNaR
+    encodedNext.posit_dot_o := Mux(rawDotHasNaR || macAccumulatorIsNaR,
+      encodeRawPositNaR, rawDotAfterEncode)
   }
 
   val divisionExecutor = Module(new PvuDivisionCore(MAX_POSIT_WIDTH, MAX_VECTOR_SIZE,

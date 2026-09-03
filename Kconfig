@@ -93,6 +93,13 @@ menu "RESNET_TEST"
             Run the operation-complete, exact SoftPosit reference regression.
             This is the baseline driver for the tagged ready/valid protocol.
 
+    config PVU_MAC_REGRESSION
+        bool "pvu_mac_exact_reference_regression"
+        default n
+        help
+            Run the Posit32 MAC regression: c + sum(a[i] * b[i]).
+            Uses the existing tagged ready/valid protocol and SoftPosit oracle.
+
     endchoice
 endmenu
 
