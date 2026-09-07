@@ -467,6 +467,15 @@ inline size_t parse_positive_argument(const char* argument,
   return static_cast<size_t>(parsed);
 }
 
+inline bool is_qwen3_0_6b_model(const std::string& model) {
+  static const std::string identity = "Qwen3-0.6B";
+  if (model == identity) return true;
+  return model.size() > identity.size() &&
+         model.compare(model.size() - identity.size(), identity.size(),
+                       identity) == 0 &&
+         model[model.size() - identity.size() - 1] == '/';
+}
+
 }  // namespace qwen3_trace_detail
 
 inline Qwen3Trace load_qwen3_trace(const std::string& root) {
@@ -486,6 +495,10 @@ inline Qwen3Trace load_qwen3_trace(const std::string& root) {
   Qwen3Trace trace;
   trace.model =
       require_string(require_member(metadata, "model", "root"), "model");
+  if (trace.model != "fixture" && !is_qwen3_0_6b_model(trace.model)) {
+    throw std::runtime_error(
+        "metadata.json: production model must identify Qwen3-0.6B");
+  }
   trace.prompt =
       require_string(require_member(metadata, "prompt", "root"), "prompt");
   const uint64_t layer_index =
@@ -528,6 +541,15 @@ inline Qwen3Trace load_qwen3_trace(const std::string& root) {
   for (const auto& entry : expected_modules) {
     expected_prefixes.emplace(entry.first, entry.second);
   }
+  const std::map<std::string, std::pair<size_t, size_t>>
+      production_dimensions = {
+          {"q_proj", {1024, 2048}},
+          {"k_proj", {1024, 1024}},
+          {"v_proj", {1024, 1024}},
+          {"gate_proj", {1024, 3072}},
+          {"up_proj", {1024, 3072}},
+          {"down_proj", {3072, 1024}},
+      };
 
   const auto& module_values =
       require_type(require_member(metadata, "modules", "root"),
@@ -579,6 +601,19 @@ inline Qwen3Trace load_qwen3_trace(const std::string& root) {
     std::vector<size_t> output_shape = require_matrix_shape(
         require_member(descriptor, "output_shape", context),
         context + ".output_shape");
+    if (trace.model != "fixture") {
+      const auto dimensions = production_dimensions.at(prefix);
+      const size_t input_features = dimensions.first;
+      const size_t output_rows = dimensions.second;
+      if (input_shape != std::vector<size_t>({16, input_features}) ||
+          weight_shape !=
+              std::vector<size_t>({output_rows, input_features}) ||
+          output_shape != std::vector<size_t>({16, output_rows})) {
+        throw std::runtime_error(
+            "metadata.json: " + prefix +
+            " does not match Qwen3-0.6B tensor dimensions");
+      }
+    }
     if (input_shape[0] != trace.input_token_ids.size() ||
         output_shape[0] != input_shape[0] ||
         output_shape[1] != weight_shape[0] ||
