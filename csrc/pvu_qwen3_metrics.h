@@ -72,26 +72,24 @@ struct ComparisonStats {
   double max_absolute_error = 0.0;
 
   void add(uint32_t raw_p32, float reference) {
-    if (!std::isfinite(reference)) {
-      ++non_finite_references;
-      return;
-    }
-
-    ++finite_references;
     const float result = p32_to_float(raw_p32);
-    if (!std::isfinite(result)) {
-      ++non_finite_results;
-      return;
+    const bool reference_is_finite = std::isfinite(reference);
+    const bool result_is_finite = std::isfinite(result);
+
+    if (reference_is_finite) {
+      ++finite_references;
+      if (reference == 0.0F) ++zero_references;
+    } else {
+      ++non_finite_references;
     }
+    if (!result_is_finite) ++non_finite_results;
+    if (!reference_is_finite || !result_is_finite) return;
 
     ulp.add(fp32_ulp_distance(result, reference));
     const double absolute_error =
         std::fabs(static_cast<double>(result) - static_cast<double>(reference));
     if (absolute_error > max_absolute_error) max_absolute_error = absolute_error;
-    if (reference == 0.0F) {
-      ++zero_references;
-      return;
-    }
+    if (reference == 0.0F) return;
 
     const double relative_error = absolute_error / std::fabs(reference);
     ++relative_error_samples;
