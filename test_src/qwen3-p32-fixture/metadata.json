@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "model": "qwen3-p32-fixture",
+  "model": "fixture",
   "prompt": "fixture",
   "input_token_ids": [
     0
