@@ -297,7 +297,8 @@ int main(int argc, char** argv) {
     std::map<std::string, ModuleReport> reports;
     for (const auto& named_module : trace.modules) {
       ModuleReport report;
-      for (size_t token = 0; token < selection.token_count; ++token) {
+      const size_t token_count = selection.token_count == 0 ? trace.modules.at("q_proj").input.shape.at(0) : selection.token_count;
+      for (size_t token = 0; token < token_count; ++token) {
         for (size_t row = 0; row < selection.row_count; ++row) {
           verify_element(driver, named_module.first, named_module.second, token,
                          row, report);

@@ -41,7 +41,7 @@ struct Qwen3Trace {
 
 struct Qwen3Selection {
   std::string trace_root;
-  size_t token_count = 1;
+  size_t token_count = 0;
   size_t row_count = 4;
 };
 
