@@ -75,6 +75,9 @@ inline uint64_t fp32_ulp_distance(float lhs, float rhs) {
 }
 
 struct ComparisonStats {
+  uint64_t samples = 0;
+  uint64_t finite_samples = 0;
+  uint64_t special_samples = 0;
   uint64_t finite_references = 0;
   uint64_t zero_references = 0;
   uint64_t non_finite_references = 0;
@@ -87,8 +90,14 @@ struct ComparisonStats {
 
   void add(uint32_t raw_p32, float reference) {
     const float result = p32_to_float(raw_p32);
+    ++samples;
     const bool reference_is_finite = std::isfinite(reference);
     const bool result_is_finite = std::isfinite(result);
+    if (reference_is_finite && result_is_finite) {
+      ++finite_samples;
+    } else {
+      ++special_samples;
+    }
 
     if (reference_is_finite) {
       ++finite_references;
@@ -120,6 +129,28 @@ struct ComparisonStats {
                ? 0.0
                : relative_error_sum /
                      static_cast<double>(relative_error_samples);
+  }
+
+  void merge(const ComparisonStats& other) {
+    samples += other.samples;
+    finite_samples += other.finite_samples;
+    special_samples += other.special_samples;
+    finite_references += other.finite_references;
+    zero_references += other.zero_references;
+    non_finite_references += other.non_finite_references;
+    non_finite_results += other.non_finite_results;
+    relative_error_samples += other.relative_error_samples;
+    ulp.zero += other.ulp.zero;
+    ulp.one += other.ulp.one;
+    ulp.two_to_four += other.ulp.two_to_four;
+    ulp.five_or_more += other.ulp.five_or_more;
+    relative_error_sum += other.relative_error_sum;
+    if (other.max_relative_error > max_relative_error) {
+      max_relative_error = other.max_relative_error;
+    }
+    if (other.max_absolute_error > max_absolute_error) {
+      max_absolute_error = other.max_absolute_error;
+    }
   }
 };
 

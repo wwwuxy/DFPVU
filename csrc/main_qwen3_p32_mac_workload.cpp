@@ -50,6 +50,7 @@ class Driver {
     tick();
     dut_.reset = 0;
     dut_.eval();
+    rising_edges_after_reset_ = 0;
   }
 
   uint32_t run_p32_mac(const std::array<uint32_t, kLanes>& activations,
@@ -116,7 +117,7 @@ class Driver {
     return result;
   }
 
-  uint64_t cycles() const { return cycles_; }
+  uint64_t cycles() const { return rising_edges_after_reset_; }
 
  private:
   void tick() {
@@ -126,12 +127,14 @@ class Driver {
     dut_.eval();
     dut_.clock = 0;
     dut_.eval();
-    ++cycles_;
+    if (dut_.reset == 0) {
+      ++rising_edges_after_reset_;
+    }
   }
 
   VPvuTop& dut_;
   uint32_t next_tag_ = 1;
-  uint64_t cycles_ = 0;
+  uint64_t rising_edges_after_reset_ = 0;
 };
 
 uint32_t run_p32_mac_element(Driver& driver,
@@ -191,22 +194,89 @@ float ref_fp32_mac_element(const pvu::LinearModuleTrace& module, size_t token,
   return accumulator;
 }
 
+struct ModuleReport {
+  pvu::WorkloadMetrics workload;
+  uint64_t elements = 0;
+  uint64_t exact_mismatches = 0;
+  pvu::ComparisonStats ordered_fp32;
+  pvu::ComparisonStats pytorch_output;
+  std::string first_mismatch;
+};
+
+float pytorch_output_element(const pvu::LinearModuleTrace& module,
+                             size_t token, size_t row) {
+  require_element_bounds(module, token, row);
+  return module.output.values[token * module.output.shape[1] + row];
+}
+
 void verify_element(Driver& driver, const std::string& module_name,
                     const pvu::LinearModuleTrace& module, size_t token,
-                    size_t row, pvu::WorkloadMetrics& metrics,
-                    uint64_t& exact_mismatches) {
+                    size_t row, ModuleReport& report) {
   const uint32_t hardware =
-      run_p32_mac_element(driver, module, token, row, metrics);
+      run_p32_mac_element(driver, module, token, row, report.workload);
   const uint32_t expected = ref_p32_mac_element(module, token, row);
+  ++report.elements;
   if (hardware != expected) {
-    ++exact_mismatches;
-    throw std::runtime_error("P32 MAC mismatch: module=" + module_name +
-                             " token=" + std::to_string(token) +
-                             " row=" + std::to_string(row) +
-                             " expected=" + hex32(expected) +
-                             " actual=" + hex32(hardware));
+    ++report.exact_mismatches;
+    if (report.first_mismatch.empty()) {
+      report.first_mismatch =
+          "P32 MAC mismatch: module=" + module_name +
+          " token=" + std::to_string(token) +
+          " row=" + std::to_string(row) +
+          " expected=" + hex32(expected) + " actual=" + hex32(hardware);
+    }
   }
-  (void)ref_fp32_mac_element(module, token, row);
+  report.ordered_fp32.add(hardware, ref_fp32_mac_element(module, token, row));
+  report.pytorch_output.add(hardware, pytorch_output_element(module, token, row));
+}
+
+void merge_workload(pvu::WorkloadMetrics& total,
+                    const pvu::WorkloadMetrics& module) {
+  total.cycles += module.cycles;
+  total.requests += module.requests;
+  total.active_lanes += module.active_lanes;
+}
+
+void print_comparison_stats(const std::string& name,
+                            const pvu::ComparisonStats& stats) {
+  std::cout << "  " << name << ": samples=" << stats.samples
+            << " finite=" << stats.finite_samples
+            << " zero=" << stats.zero_references
+            << " special=" << stats.special_samples
+            << " result-special=" << stats.non_finite_results << std::endl;
+  std::cout << "    ULP distribution: 0=" << stats.ulp.zero
+            << " 1=" << stats.ulp.one
+            << " 2-4=" << stats.ulp.two_to_four
+            << " >=5=" << stats.ulp.five_or_more << std::endl;
+  std::cout << std::fixed << std::setprecision(9)
+            << "    max relative error=" << stats.max_relative_error
+            << " mean relative error=" << stats.mean_relative_error()
+            << " max absolute error=" << stats.max_absolute_error << std::endl;
+}
+
+void print_cycle_report(const std::string& name,
+                        const pvu::WorkloadMetrics& metrics) {
+  const uint64_t mac_terms = metrics.requests * kLanes;
+  const double requests_per_cycle =
+      metrics.cycles == 0
+          ? 0.0
+          : static_cast<double>(metrics.requests) /
+                static_cast<double>(metrics.cycles);
+  const double mac_terms_per_cycle =
+      metrics.cycles == 0
+          ? 0.0
+          : static_cast<double>(mac_terms) / static_cast<double>(metrics.cycles);
+  const double lane_utilization =
+      mac_terms == 0
+          ? 0.0
+          : static_cast<double>(metrics.active_lanes) /
+                static_cast<double>(mac_terms);
+  std::cout << std::fixed << std::setprecision(6) << "  " << name
+            << ": requests=" << metrics.requests << " mac terms=" << mac_terms
+            << " cycles=" << metrics.cycles
+            << " requests/cycle=" << requests_per_cycle
+            << " mac terms/cycle=" << mac_terms_per_cycle
+            << " lane utilization=" << lane_utilization << std::endl;
 }
 
 }  // namespace
@@ -224,38 +294,75 @@ int main(int argc, char** argv) {
     VPvuTop dut;
     Driver driver(dut);
     driver.reset();
-    pvu::WorkloadMetrics metrics;
-    uint64_t total_exact_mismatches = 0;
-
-    const uint32_t hardware = run_p32_mac_element(
-        driver, trace.modules.at("q_proj"), 0, 0, metrics);
-    const uint32_t expected =
-        ref_p32_mac_element(trace.modules.at("q_proj"), 0, 0);
-    if (hardware != expected) {
-      throw std::runtime_error("P32 MAC mismatch: module=q_proj token=0 row=0 "
-                               "expected=" + hex32(expected) +
-                               " actual=" + hex32(hardware));
-    }
-
+    std::map<std::string, ModuleReport> reports;
     for (const auto& named_module : trace.modules) {
-      uint64_t module_exact_mismatches = 0;
+      ModuleReport report;
       for (size_t token = 0; token < selection.token_count; ++token) {
         for (size_t row = 0; row < selection.row_count; ++row) {
-          if (named_module.first == "q_proj" && token == 0 && row == 0) {
-            continue;
-          }
           verify_element(driver, named_module.first, named_module.second, token,
-                         row, metrics, module_exact_mismatches);
+                         row, report);
         }
       }
-      total_exact_mismatches += module_exact_mismatches;
-      std::cout << named_module.first
-                << ": exact mismatches=" << module_exact_mismatches << '\n';
+      reports.emplace(named_module.first, std::move(report));
     }
-    std::cout << "total: exact mismatches=" << total_exact_mismatches << '\n';
+
+    pvu::WorkloadMetrics total_workload;
+    pvu::ComparisonStats total_ordered_fp32;
+    pvu::ComparisonStats total_pytorch_output;
+    uint64_t total_elements = 0;
+    uint64_t total_exact_mismatches = 0;
+    std::string first_mismatch;
+    for (const auto& named_report : reports) {
+      const ModuleReport& report = named_report.second;
+      total_elements += report.elements;
+      total_exact_mismatches += report.exact_mismatches;
+      merge_workload(total_workload, report.workload);
+      total_ordered_fp32.merge(report.ordered_fp32);
+      total_pytorch_output.merge(report.pytorch_output);
+      if (first_mismatch.empty() && !report.first_mismatch.empty()) {
+        first_mismatch = report.first_mismatch;
+      }
+    }
+
+    std::cout << "Hardware vs SoftPosit (Verilator workload data)" << std::endl;
+    for (const auto& named_report : reports) {
+      const ModuleReport& report = named_report.second;
+      std::cout << "  " << named_report.first << ": elements="
+                << report.elements << " exact mismatches="
+                << report.exact_mismatches << std::endl;
+    }
+    std::cout << "  overall: elements=" << total_elements
+              << " exact mismatches=" << total_exact_mismatches << std::endl;
+
+    std::cout << "Posit vs ordered FP32 (Verilator workload data; observational)"
+              << std::endl;
+    for (const auto& named_report : reports) {
+      print_comparison_stats(named_report.first,
+                             named_report.second.ordered_fp32);
+    }
+    print_comparison_stats("overall", total_ordered_fp32);
+
+    std::cout << "Posit vs PyTorch output (Verilator workload data; observational)"
+              << std::endl;
+    for (const auto& named_report : reports) {
+      print_comparison_stats(named_report.first,
+                             named_report.second.pytorch_output);
+    }
+    print_comparison_stats("overall", total_pytorch_output);
+
+    std::cout << "Cycle report (Verilator workload data; not frequency/system TOPS)"
+              << std::endl;
+    for (const auto& named_report : reports) {
+      print_cycle_report(named_report.first, named_report.second.workload);
+    }
+    print_cycle_report("overall", total_workload);
+
+    if (total_exact_mismatches != 0) {
+      throw std::runtime_error(first_mismatch);
+    }
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
-    std::cerr << "Qwen3 trace error: " << error.what() << '\n';
+    std::cerr << "Qwen3 trace error: " << error.what() << std::endl;
     return EXIT_FAILURE;
   }
 }
