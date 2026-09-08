@@ -41,6 +41,20 @@ inline float p32_to_float(uint32_t raw) {
   return static_cast<float>(convertP32ToDouble(posit));
 }
 
+inline uint32_t float_to_p32(float value) {
+  return convertDoubleToP32(static_cast<double>(value)).v;
+}
+
+inline uint32_t p32_mul_add(uint32_t lhs, uint32_t rhs, uint32_t accumulator) {
+  posit32_t lhs_posit{};
+  posit32_t rhs_posit{};
+  posit32_t accumulator_posit{};
+  lhs_posit.v = lhs;
+  rhs_posit.v = rhs;
+  accumulator_posit.v = accumulator;
+  return p32_mulAdd(lhs_posit, rhs_posit, accumulator_posit).v;
+}
+
 inline uint32_t ordered_fp32_key(float value) {
   uint32_t bits = 0;
   static_assert(sizeof(bits) == sizeof(value), "float must be IEEE binary32");
