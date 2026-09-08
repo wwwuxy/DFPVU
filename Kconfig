@@ -100,6 +100,14 @@ menu "RESNET_TEST"
             Run the Posit32 MAC regression: c + sum(a[i] * b[i]).
             Uses the existing tagged ready/valid protocol and SoftPosit oracle.
 
+    config QWEN3_P32_MAC_WORKLOAD
+        bool "qwen3_p32_mac_workload"
+        default n
+        help
+            Replay selected Qwen3 linear-output elements through the Posit32
+            MAC datapath and report Verilator workload numerical loss and
+            utilization metrics.
+
     endchoice
 endmenu
 
