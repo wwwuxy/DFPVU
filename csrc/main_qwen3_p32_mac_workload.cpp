@@ -2,6 +2,7 @@
 
 #ifdef CONFIG_QWEN3_P32_MAC_WORKLOAD
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -406,7 +407,10 @@ int main(int argc, char** argv) {
           selection.token_count == 0
               ? trace.modules.at("q_proj").input.shape.at(0)
               : selection.token_count;
-      const size_t row_count = selection.row_count;
+      const size_t row_count =
+          selection.row_count == 0
+              ? std::min<size_t>(64, named_module.second.weight.shape.at(0))
+              : selection.row_count;
       std::vector<ElementCoordinate> coordinates;
       coordinates.reserve(token_count * row_count);
       for (size_t token = 0; token < token_count; ++token) {
