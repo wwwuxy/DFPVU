@@ -7,9 +7,12 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include <verilated.h>
 
@@ -53,20 +56,32 @@ class Driver {
     rising_edges_after_reset_ = 0;
   }
 
-  uint32_t run_p32_mac(const std::array<uint32_t, kLanes>& activations,
-                       const std::array<uint32_t, kLanes>& weights,
-                       uint32_t accumulator) {
-    const uint32_t tag = next_tag_++;
-    dut_.io_posit_i1_0 = activations[0];
-    dut_.io_posit_i1_1 = activations[1];
-    dut_.io_posit_i1_2 = activations[2];
-    dut_.io_posit_i1_3 = activations[3];
-    dut_.io_posit_i2_0 = weights[0];
-    dut_.io_posit_i2_1 = weights[1];
-    dut_.io_posit_i2_2 = weights[2];
-    dut_.io_posit_i2_3 = weights[3];
-    dut_.io_posit_i3 = accumulator;
-    dut_.io_in_tag = tag;
+  struct P32MacRequest {
+    std::array<uint32_t, kLanes> activations;
+    std::array<uint32_t, kLanes> weights;
+    uint32_t accumulator;
+    uint32_t tag;
+  };
+
+  uint32_t next_tag() { return next_tag_++; }
+
+  void drive(const P32MacRequest* request) {
+    dut_.io_out_ready = 1;
+    dut_.io_in_valid = request != nullptr;
+    if (request == nullptr) {
+      dut_.eval();
+      return;
+    }
+    dut_.io_posit_i1_0 = request->activations[0];
+    dut_.io_posit_i1_1 = request->activations[1];
+    dut_.io_posit_i1_2 = request->activations[2];
+    dut_.io_posit_i1_3 = request->activations[3];
+    dut_.io_posit_i2_0 = request->weights[0];
+    dut_.io_posit_i2_1 = request->weights[1];
+    dut_.io_posit_i2_2 = request->weights[2];
+    dut_.io_posit_i2_3 = request->weights[3];
+    dut_.io_posit_i3 = request->accumulator;
+    dut_.io_in_tag = request->tag;
     dut_.io_op = kP32MacOp;
     dut_.io_Isposit = 1;
     dut_.io_Outposit = 1;
@@ -83,44 +98,23 @@ class Driver {
     dut_.io_src_posit_width = 32;
     dut_.io_dst_posit_width = 32;
     dut_.io_vector_size = kLanes;
-    dut_.io_in_valid = 1;
     dut_.eval();
-
-    size_t wait_cycles = 0;
-    while (dut_.io_in_ready == 0) {
-      if (++wait_cycles > 32) {
-        throw std::runtime_error("P32 MAC request did not observe in_ready");
-      }
-      tick();
-    }
-    tick();
-    dut_.io_in_valid = 0;
-    dut_.eval();
-
-    wait_cycles = 0;
-    while (dut_.io_out_valid == 0) {
-      if (++wait_cycles > 32) {
-        throw std::runtime_error("P32 MAC request produced no out_valid");
-      }
-      tick();
-    }
-    if (static_cast<uint32_t>(dut_.io_out_tag) != tag ||
-        static_cast<uint8_t>(dut_.io_out_op) != kP32MacOp) {
-      throw std::runtime_error("P32 MAC response tag/op mismatch");
-    }
-    const uint32_t result = static_cast<uint32_t>(dut_.io_posit_dot_o);
-    dut_.io_out_ready = 1;
-    dut_.eval();
-    tick();
-    dut_.io_out_ready = 0;
-    dut_.eval();
-    return result;
   }
+
+  bool in_ready() const { return dut_.io_in_ready != 0; }
+  bool out_valid() const { return dut_.io_out_valid != 0; }
+  uint32_t out_tag() const { return static_cast<uint32_t>(dut_.io_out_tag); }
+  uint8_t out_op() const { return static_cast<uint8_t>(dut_.io_out_op); }
+  uint32_t out_result() const {
+    return static_cast<uint32_t>(dut_.io_posit_dot_o);
+  }
+
+  void tick() { tick_clock(); }
 
   uint64_t cycles() const { return rising_edges_after_reset_; }
 
  private:
-  void tick() {
+  void tick_clock() {
     dut_.clock = 0;
     dut_.eval();
     dut_.clock = 1;
@@ -137,29 +131,130 @@ class Driver {
   uint64_t rising_edges_after_reset_ = 0;
 };
 
-uint32_t run_p32_mac_element(Driver& driver,
-                             const pvu::LinearModuleTrace& module,
-                             size_t token, size_t row,
-                             pvu::WorkloadMetrics& metrics) {
-  require_element_bounds(module, token, row);
-  const size_t k_width = module.input.shape[1];
+struct ElementCoordinate {
+  size_t token;
+  size_t row;
+};
+
+struct ElementState {
+  ElementCoordinate coordinate;
+  size_t next_k = 0;
   uint32_t accumulator = 0;
+  bool waiting_for_response = false;
+  bool complete = false;
+};
+
+struct HeldRequest {
+  size_t element_index;
+  Driver::P32MacRequest request;
+};
+
+Driver::P32MacRequest make_p32_mac_request(
+    Driver& driver, const pvu::LinearModuleTrace& module,
+    const ElementState& element) {
+  const size_t k_width = module.input.shape[1];
+  Driver::P32MacRequest request{};
+  request.accumulator = element.accumulator;
+  request.tag = driver.next_tag();
+  for (size_t lane = 0; lane < kLanes; ++lane) {
+    request.activations[lane] = pvu::float_to_p32(
+        module.input.values[element.coordinate.token * k_width +
+                            element.next_k + lane]);
+    request.weights[lane] = pvu::float_to_p32(
+        module.weight.values[element.coordinate.row * k_width +
+                             element.next_k + lane]);
+  }
+  return request;
+}
+
+std::vector<uint32_t> run_p32_mac_elements(
+    Driver& driver, const pvu::LinearModuleTrace& module,
+    const std::vector<ElementCoordinate>& coordinates,
+    pvu::WorkloadMetrics& metrics) {
+  const size_t k_width = module.input.shape[1];
+  std::vector<ElementState> elements;
+  elements.reserve(coordinates.size());
+  for (const ElementCoordinate coordinate : coordinates) {
+    require_element_bounds(module, coordinate.token, coordinate.row);
+    elements.push_back({coordinate});
+  }
+
+  std::vector<uint32_t> results(coordinates.size());
+  std::unordered_map<uint32_t, size_t> outstanding_by_tag;
+  HeldRequest held{};
+  bool has_held_request = false;
+  size_t completed = 0;
+  size_t next_candidate = 0;
+  size_t idle_cycles = 0;
   const uint64_t cycles_before = driver.cycles();
-  for (size_t k = 0; k < k_width; k += kLanes) {
-    std::array<uint32_t, kLanes> activations{};
-    std::array<uint32_t, kLanes> weights{};
-    for (size_t lane = 0; lane < kLanes; ++lane) {
-      activations[lane] =
-          pvu::float_to_p32(module.input.values[token * k_width + k + lane]);
-      weights[lane] =
-          pvu::float_to_p32(module.weight.values[row * k_width + k + lane]);
+
+  while (completed != elements.size()) {
+    if (!has_held_request) {
+      for (size_t attempts = 0; attempts < elements.size(); ++attempts) {
+        const size_t element_index = next_candidate++ % elements.size();
+        ElementState& element = elements[element_index];
+        if (!element.complete && !element.waiting_for_response) {
+          held = {element_index,
+                  make_p32_mac_request(driver, module, element)};
+          has_held_request = true;
+          break;
+        }
+      }
     }
-    accumulator = driver.run_p32_mac(activations, weights, accumulator);
-    ++metrics.requests;
-    metrics.active_lanes += kLanes;
+
+    driver.drive(has_held_request ? &held.request : nullptr);
+    const bool accepted_request = has_held_request && driver.in_ready();
+    const bool accepted_response = driver.out_valid();
+
+    if (accepted_response) {
+      if (driver.out_op() != kP32MacOp) {
+        throw std::runtime_error("P32 MAC response tag/op mismatch");
+      }
+      const auto response = outstanding_by_tag.find(driver.out_tag());
+      if (response == outstanding_by_tag.end()) {
+        throw std::runtime_error("P32 MAC response tag/op mismatch");
+      }
+      ElementState& element = elements[response->second];
+      if (!element.waiting_for_response) {
+        throw std::runtime_error("P32 MAC response tag/op mismatch");
+      }
+      element.accumulator = driver.out_result();
+      element.next_k += kLanes;
+      element.waiting_for_response = false;
+      const size_t element_index = response->second;
+      outstanding_by_tag.erase(response);
+      if (element.next_k == k_width) {
+        element.complete = true;
+        results[element_index] = element.accumulator;
+        ++completed;
+      }
+    }
+
+    if (accepted_request) {
+      ElementState& element = elements[held.element_index];
+      if (element.waiting_for_response || element.complete) {
+        throw std::runtime_error("P32 MAC scheduler dependency violation");
+      }
+      element.waiting_for_response = true;
+      const auto inserted =
+          outstanding_by_tag.emplace(held.request.tag, held.element_index);
+      if (!inserted.second) {
+        throw std::runtime_error("P32 MAC scheduler duplicate tag");
+      }
+      has_held_request = false;
+      ++metrics.requests;
+      metrics.active_lanes += kLanes;
+    }
+
+    if (accepted_request || accepted_response) {
+      idle_cycles = 0;
+    } else if (++idle_cycles > 32) {
+      throw std::runtime_error("P32 MAC scheduler made no handshake progress");
+    }
+    driver.tick();
   }
   metrics.cycles += driver.cycles() - cycles_before;
-  return accumulator;
+  return results;
 }
 
 uint32_t ref_p32_mac_element(const pvu::LinearModuleTrace& module,
@@ -209,25 +304,35 @@ float pytorch_output_element(const pvu::LinearModuleTrace& module,
   return module.output.values[token * module.output.shape[1] + row];
 }
 
-void verify_element(Driver& driver, const std::string& module_name,
-                    const pvu::LinearModuleTrace& module, size_t token,
-                    size_t row, ModuleReport& report) {
-  const uint32_t hardware =
-      run_p32_mac_element(driver, module, token, row, report.workload);
-  const uint32_t expected = ref_p32_mac_element(module, token, row);
-  ++report.elements;
-  if (hardware != expected) {
-    ++report.exact_mismatches;
-    if (report.first_mismatch.empty()) {
-      report.first_mismatch =
-          "P32 MAC mismatch: module=" + module_name +
-          " token=" + std::to_string(token) +
-          " row=" + std::to_string(row) +
-          " expected=" + hex32(expected) + " actual=" + hex32(hardware);
+void verify_elements(Driver& driver, const std::string& module_name,
+                     const pvu::LinearModuleTrace& module,
+                     const std::vector<ElementCoordinate>& coordinates,
+                     ModuleReport& report) {
+  const std::vector<uint32_t> hardware =
+      run_p32_mac_elements(driver, module, coordinates, report.workload);
+  for (size_t index = 0; index < coordinates.size(); ++index) {
+    const ElementCoordinate coordinate = coordinates[index];
+    const uint32_t expected =
+        ref_p32_mac_element(module, coordinate.token, coordinate.row);
+    ++report.elements;
+    if (hardware[index] != expected) {
+      ++report.exact_mismatches;
+      if (report.first_mismatch.empty()) {
+        report.first_mismatch =
+            "P32 MAC mismatch: module=" + module_name +
+            " token=" + std::to_string(coordinate.token) +
+            " row=" + std::to_string(coordinate.row) +
+            " expected=" + hex32(expected) +
+            " actual=" + hex32(hardware[index]);
+      }
     }
+    report.ordered_fp32.add(
+        hardware[index],
+        ref_fp32_mac_element(module, coordinate.token, coordinate.row));
+    report.pytorch_output.add(
+        hardware[index],
+        pytorch_output_element(module, coordinate.token, coordinate.row));
   }
-  report.ordered_fp32.add(hardware, ref_fp32_mac_element(module, token, row));
-  report.pytorch_output.add(hardware, pytorch_output_element(module, token, row));
 }
 
 void merge_workload(pvu::WorkloadMetrics& total,
@@ -297,13 +402,25 @@ int main(int argc, char** argv) {
     std::map<std::string, ModuleReport> reports;
     for (const auto& named_module : trace.modules) {
       ModuleReport report;
-      const size_t token_count = selection.token_count == 0 ? trace.modules.at("q_proj").input.shape.at(0) : selection.token_count;
+      const size_t token_count =
+          selection.token_count == 0
+              ? trace.modules.at("q_proj").input.shape.at(0)
+              : selection.token_count;
+      const size_t row_count = selection.row_count;
+      std::vector<ElementCoordinate> coordinates;
+      coordinates.reserve(token_count * row_count);
       for (size_t token = 0; token < token_count; ++token) {
-        for (size_t row = 0; row < selection.row_count; ++row) {
-          verify_element(driver, named_module.first, named_module.second, token,
-                         row, report);
+        for (size_t index = 0; index < row_count; ++index) {
+          const size_t row =
+              row_count == 1
+                  ? 0
+                  : index * (named_module.second.weight.shape.at(0) - 1) /
+                        (row_count - 1);
+          coordinates.push_back({token, row});
         }
       }
+      verify_elements(driver, named_module.first, named_module.second,
+                      coordinates, report);
       reports.emplace(named_module.first, std::move(report));
     }
 
