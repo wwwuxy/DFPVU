@@ -109,6 +109,15 @@ menu "RESNET_TEST"
             utilization metrics.
 
     endchoice
+
+config QWEN3_P32_MAC_TRACE_DIR
+    string "Qwen3 P32 MAC trace directory"
+    depends on QWEN3_P32_MAC_WORKLOAD
+    default "/tmp/qwen3-0.6b-p32-trace"
+    help
+        Trace generated from Qwen3-0.6B. This workload never falls back to
+        the fixture; make run reports an error when this directory is invalid.
+
 endmenu
 
 config SAMPLE_TEST

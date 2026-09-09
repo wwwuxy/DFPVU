@@ -38,6 +38,17 @@ VERILATOR_FLAGS += -j 16
 
 include .config
 
+QWEN3_P32_MAC_TRACE_DIR := $(subst ",,$(CONFIG_QWEN3_P32_MAC_TRACE_DIR))
+ifeq ($(CONFIG_QWEN3_P32_MAC_WORKLOAD),y)
+ifeq ($(strip $(QWEN3_P32_MAC_TRACE_DIR)),)
+$(error CONFIG_QWEN3_P32_MAC_TRACE_DIR must name a Qwen3 trace directory)
+endif
+QWEN3_P32_MAC_RUN_ARGS := $(QWEN3_P32_MAC_TRACE_DIR)
+endif
+
+# The Qwen3 workload is intentionally invoked with its Kconfig trace path.
+# It cannot silently use the synthetic fixture.
+
 PVU_SOFTPOSIT_REFERENCE_TESTS := $(CONFIG_PVU_PROTOCOL_REGRESSION) $(CONFIG_PVU_MAC_REGRESSION) $(CONFIG_QWEN3_P32_MAC_WORKLOAD) $(CONFIG_RESNET_POSIT32_TO_FP4) $(CONFIG_RESNET_POSIT32_TO_FP8) $(CONFIG_RESNET_POSIT32_TO_FP16) $(CONFIG_RESNET_POSIT32_TO_FP32)
 ifneq ($(filter y,$(PVU_SOFTPOSIT_REFERENCE_TESTS)),)
 VERILATOR_FLAGS += -CFLAGS "$(SOFTPOSIT_REF_CXXFLAGS)"
@@ -83,7 +94,7 @@ $(SOFTPOSIT_REF_LIB): $(SOFTPOSIT_REF_SRCS)
 
 run:${CSRCS} ${VSRCS} $(PVU_RUN_PREREQS)
 	verilator ${VERILATOR_FLAGS} ${CSRCS} ${VSRCS}
-	./obj_dir/VPvuTop
+	./obj_dir/VPvuTop "$(QWEN3_P32_MAC_RUN_ARGS)"
 
 wave:
 	gtkwave pvu_top_wave.vcd

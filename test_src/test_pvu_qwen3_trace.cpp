@@ -186,6 +186,10 @@ int main(int argc, char** argv) {
             "QWEN3_TRACE_DIR selection mismatch");
     unsetenv("QWEN3_TRACE_DIR");
 
+    require_throws(
+        [&] { (void)pvu::parse_qwen3_selection(1, environment_argv); },
+        "QWEN3_TRACE_DIR", "missing trace selection fell back to fixture");
+
     char zero_count[] = "00";
     char* zero_argv[] = {arg0, arg1, zero_count};
     require_throws(

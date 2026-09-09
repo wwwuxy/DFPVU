@@ -655,10 +655,11 @@ inline Qwen3Selection parse_qwen3_selection(int argc, char** argv) {
     selection.trace_root = argv[1] == nullptr ? "" : argv[1];
   } else {
     const char* environment_root = std::getenv("QWEN3_TRACE_DIR");
-    selection.trace_root =
-        environment_root != nullptr && *environment_root != '\0'
-            ? environment_root
-            : "test_src/qwen3-p32-fixture";
+    if (environment_root == nullptr || *environment_root == 0) {
+      throw std::runtime_error(
+          "QWEN3_TRACE_DIR is required when trace-root is not an argument");
+    }
+    selection.trace_root = environment_root;
   }
   if (selection.trace_root.empty()) {
     throw std::runtime_error("trace root must not be empty");
