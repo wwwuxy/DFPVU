@@ -86,3 +86,54 @@ fixture P32 MAC scheduler: exact mismatches=0 requests/cycle=0.400000
 
 The fixture is exact against the existing ordered raw SoftPosit oracle and
 improves request rate from `0.142857` to `0.400000` requests/cycle (2.8x).
+
+## K=8 accumulator-chain coverage fix
+
+The original checked-in fixture has `K=4`, so each selected element executes
+only one `op=11` request. The focused test now creates an isolated temporary
+trace from `test_src/qwen3-p32-k8-fixture/metadata.json`. It repeats each
+module's finite first K=4 input and weight group into a `[1,8]` input and
+weight, retains one selected row, and invokes the runner with `1 1`. That is
+six elements with two groups each: `requests=12` and `mac terms=48`.
+
+### RED mutation
+
+Commands:
+
+```bash
+cp csrc/main_qwen3_p32_mac_workload.cpp /tmp/main_qwen3_p32_mac_workload.pre-k8-mutation.cpp
+# Temporarily change: request.accumulator = element.accumulator; -> 0
+make run
+bash test_src/test_qwen3_p32_mac_workload.sh ./obj_dir/VPvuTop
+```
+
+The normal K=4 fixture still passed, but the K=8 case failed exactly as
+required. The first raw-oracle failure was:
+
+```text
+Qwen3 trace error: P32 MAC mismatch: module=down_proj token=0 row=0 expected=0x58000000 actual=0x50000000
+  overall: elements=6 exact mismatches=6
+  overall: requests=12 mac terms=48 cycles=84 requests/cycle=0.142857 mac terms/cycle=0.571429 lane utilization=1.000000
+```
+
+This mutation proves that the second group must receive its own first-group
+raw P32 response; starting it at zero is detected even though K=4 remains
+exact.
+
+### GREEN
+
+After restoring the source, the focused commands were:
+
+```bash
+make run
+bash test_src/test_qwen3_p32_mac_workload.sh ./obj_dir/VPvuTop
+git diff --check
+```
+
+Output:
+
+```text
+  overall: elements=24 exact mismatches=0
+  overall: requests=24 mac terms=96 cycles=60 requests/cycle=0.400000 mac terms/cycle=1.600000 lane utilization=1.000000
+fixture P32 MAC scheduler: exact mismatches=0 requests/cycle=0.400000; K=8 recurrence exact=0 requests=12
+```
