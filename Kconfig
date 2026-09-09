@@ -108,6 +108,14 @@ menu "RESNET_TEST"
             MAC datapath and report Verilator workload numerical loss and
             utilization metrics.
 
+    config MATRIX_GEMM_P32_BENCHMARK
+        bool "matrix_gemm_p32_throughput_benchmark"
+        default n
+        help
+            Run one deterministic Posit32 GEMM MxK times KxN benchmark.
+            The runner reports cycle-level throughput and verifies every
+            output against the SoftPosit MAC recurrence.
+
     endchoice
 
 config QWEN3_P32_MAC_TRACE_DIR
