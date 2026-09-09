@@ -42,7 +42,7 @@ After a build, the generated runner also accepts optional positional selection p
 ./obj_dir/VPvuTop [trace-root [token-count [row-count]]]
 ```
 
-`token-count` and `row-count` are positive prefixes bounded by every selected module dimension. Without explicit arguments, the fixture uses one token while a real Qwen trace uses all 16 Prefill tokens and four output rows for each of the six modules (384 output elements). Use explicit arguments to reduce or expand the sample.
+`token-count` and `row-count` are positive prefixes bounded by every selected module dimension. Without explicit arguments, the fixture uses one token and four rows; a real Qwen trace uses all 16 Prefill tokens and 64 uniformly spaced output rows per projection (6,144 output elements). Explicit row-count selects uniformly spaced rows.
 
 ## Read the report
 
