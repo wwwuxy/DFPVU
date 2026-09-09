@@ -40,10 +40,10 @@ include .config
 
 QWEN3_P32_MAC_TRACE_DIR := $(subst ",,$(CONFIG_QWEN3_P32_MAC_TRACE_DIR))
 ifeq ($(CONFIG_QWEN3_P32_MAC_WORKLOAD),y)
-ifeq ($(strip $(QWEN3_P32_MAC_TRACE_DIR)),)
-$(error CONFIG_QWEN3_P32_MAC_TRACE_DIR must name a Qwen3 trace directory)
-endif
 QWEN3_P32_MAC_RUN_ARGS := $(QWEN3_P32_MAC_TRACE_DIR)
+run: qwen3_p32_mac_trace_config
+qwen3_p32_mac_trace_config:
+	@test -n "$(QWEN3_P32_MAC_TRACE_DIR)" || { echo "CONFIG_QWEN3_P32_MAC_TRACE_DIR must name a Qwen3 trace directory" >&2; exit 2; }
 endif
 
 # The Qwen3 workload is intentionally invoked with its Kconfig trace path.
