@@ -1,0 +1,15 @@
+{
+  "format_version": 1,
+  "model": "fixture",
+  "prompt": "two-group fixture",
+  "input_token_ids": [0],
+  "layer_index": 0,
+  "modules": [
+    {"name":"self_attn.q_proj","artifact_prefix":"q_proj","input_shape":[1,8],"weight_shape":[1,8],"output_shape":[1,1],"dtype":"float32-le","has_bias":false},
+    {"name":"self_attn.k_proj","artifact_prefix":"k_proj","input_shape":[1,8],"weight_shape":[1,8],"output_shape":[1,1],"dtype":"float32-le","has_bias":false},
+    {"name":"self_attn.v_proj","artifact_prefix":"v_proj","input_shape":[1,8],"weight_shape":[1,8],"output_shape":[1,1],"dtype":"float32-le","has_bias":false},
+    {"name":"mlp.gate_proj","artifact_prefix":"gate_proj","input_shape":[1,8],"weight_shape":[1,8],"output_shape":[1,1],"dtype":"float32-le","has_bias":false},
+    {"name":"mlp.up_proj","artifact_prefix":"up_proj","input_shape":[1,8],"weight_shape":[1,8],"output_shape":[1,1],"dtype":"float32-le","has_bias":false},
+    {"name":"mlp.down_proj","artifact_prefix":"down_proj","input_shape":[1,8],"weight_shape":[1,8],"output_shape":[1,1],"dtype":"float32-le","has_bias":false}
+  ]
+}
