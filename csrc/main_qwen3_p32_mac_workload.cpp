@@ -385,6 +385,60 @@ void print_cycle_report(const std::string& name,
             << " lane utilization=" << lane_utilization << std::endl;
 }
 
+void print_workload_summary(const pvu::Qwen3Trace& trace,
+                            uint64_t selected_elements,
+                            const pvu::WorkloadMetrics& metrics) {
+  const uint64_t mac_terms = metrics.requests * kLanes;
+  const double requests_per_cycle =
+      metrics.cycles == 0
+          ? 0.0
+          : static_cast<double>(metrics.requests) /
+                static_cast<double>(metrics.cycles);
+  const double mac_terms_per_cycle =
+      metrics.cycles == 0
+          ? 0.0
+          : static_cast<double>(mac_terms) / static_cast<double>(metrics.cycles);
+  const double lane_utilization =
+      mac_terms == 0
+          ? 0.0
+          : static_cast<double>(metrics.active_lanes) /
+                static_cast<double>(mac_terms);
+  std::cout << "Workload summary" << std::endl;
+  std::cout << std::fixed << std::setprecision(6)
+            << "  trace model=" << trace.model
+            << " selected elements=" << selected_elements
+            << " MAC requests=" << metrics.requests
+            << " MAC terms=" << mac_terms << " cycles=" << metrics.cycles
+            << " requests/cycle=" << requests_per_cycle
+            << " MAC terms/cycle=" << mac_terms_per_cycle
+            << " lane utilization=" << lane_utilization << std::endl;
+}
+
+void print_precision_conclusion(const pvu::ComparisonStats& ordered_fp32,
+                                uint64_t exact_mismatches) {
+  std::cout << "Precision conclusion" << std::endl;
+  std::cout << "  Ordered FP32 is the numerical reference; Posit<32,2> error "
+               "is relative to it."
+            << std::endl;
+  std::cout << std::fixed << std::setprecision(9)
+            << "  P32-vs-FP32: ULP bins 0=" << ordered_fp32.ulp.zero
+            << " 1=" << ordered_fp32.ulp.one
+            << " 2-4=" << ordered_fp32.ulp.two_to_four
+            << " >=5=" << ordered_fp32.ulp.five_or_more
+            << "; max relative error=" << ordered_fp32.max_relative_error
+            << "; mean relative error=" << ordered_fp32.mean_relative_error()
+            << std::endl;
+  if (exact_mismatches == 0) {
+    std::cout << "  Hardware-vs-SoftPosit conformance PASS; P32 hardware "
+                 "accuracy conclusion is valid."
+              << std::endl;
+  } else {
+    std::cout << "  Hardware-vs-SoftPosit conformance FAILED; no P32 hardware "
+                 "accuracy conclusion is valid."
+              << std::endl;
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -478,6 +532,9 @@ int main(int argc, char** argv) {
       print_cycle_report(named_report.first, named_report.second.workload);
     }
     print_cycle_report("overall", total_workload);
+
+    print_workload_summary(trace, total_elements, total_workload);
+    print_precision_conclusion(total_ordered_fp32, total_exact_mismatches);
 
     if (total_exact_mismatches != 0) {
       throw std::runtime_error(first_mismatch);

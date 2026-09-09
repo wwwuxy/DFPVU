@@ -23,7 +23,7 @@ From the repository root, select exactly one Posit<32,2> test:
 make menuconfig
 ```
 
-Open `RESNET_TEST`, then `Posit<32, 2>`, and choose `qwen3_p32_mac_workload` (`CONFIG_QWEN3_P32_MAC_WORKLOAD`). The Kconfig choice is exclusive, so do not select another test main at the same time. Generate the header and run the checked-in small fixture:
+The Kconfig path is `RESNET_TEST` -> `Posit<32, 2>` -> `qwen3_p32_mac_workload` (`CONFIG_QWEN3_P32_MAC_WORKLOAD`). This is an exclusive test-main choice, so do not select another test main at the same time. Generate the header and run the checked-in small fixture:
 
 ```bash
 make config.h
@@ -49,6 +49,10 @@ After a build, the generated runner also accepts optional positional selection p
 `Hardware vs SoftPosit` is the conformance gate: each final raw P32 result must exactly equal the same ordered SoftPosit `p32_mulAdd` recurrence. Any mismatch makes the process fail after the report is printed.
 
 `Posit vs ordered FP32` and `Posit vs PyTorch output` are observational. They compare the final P32 value converted to FP32 with, respectively, the explicit host recurrence and the exported module output. Each module and the overall total list sample, finite, zero, and special counts; IEEE FP32 ULP bins (`0`, `1`, `2-4`, `>=5`); maximum and mean relative error; and maximum absolute error. PyTorch output can differ from the host recurrence because the library reduction order can differ.
+
+`Workload summary` restates the aggregate trace model, selected elements, MAC requests and four-lane MAC terms, cycles, requests/cycle, MAC terms/cycle, and lane utilization.
+
+`Precision conclusion` names ordered FP32 as the numerical reference: reported Posit<32,2> error is relative to that recurrence. It summarizes the aggregate P32-vs-FP32 ULP bins and maximum/mean relative error; it does not claim that P32 is more precise than FP32. Its hardware conclusion is gated by raw-result conformance: zero exact mismatches means `Hardware-vs-SoftPosit conformance PASS` and makes the P32 hardware accuracy conclusion valid; any mismatch means `FAILED` and no P32 hardware accuracy conclusion is valid.
 
 `Cycle report` counts explicit rising clock edges from reset release through the final output handshake. It reports requests, four-term MAC terms, cycles, requests/cycle, MAC terms/cycle, and active-lane utilization. All report values are Verilator workload data.
 

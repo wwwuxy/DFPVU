@@ -14,6 +14,8 @@ trap 'rm -f "$output" "$k8_output"; rm -rf "$k8_fixture"' EXIT
 "$runner" "$base_fixture" >"$output"
 
 rg -q '^  overall: elements=24 exact mismatches=0$' "$output"
+rg -q '^Workload summary$' "$output"
+rg -q '^Precision conclusion$' "$output"
 overall=$(rg '^  overall: requests=.*requests/cycle=' "$output")
 requests_per_cycle=$(sed -E 's/.*requests\/cycle=([0-9.]+).*/\1/' <<<"$overall")
 
