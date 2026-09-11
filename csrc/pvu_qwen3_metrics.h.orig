@@ -13,7 +13,6 @@ namespace pvu {
 struct WorkloadMetrics {
   uint64_t cycles = 0;
   uint64_t requests = 0;
-  uint64_t valid_mac_terms = 0;
   uint64_t active_lanes = 0;
 };
 

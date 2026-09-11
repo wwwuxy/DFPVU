@@ -55,10 +55,10 @@ void replace_once(std::string& text, const std::string& from,
   text.replace(position, from.size(), to);
 }
 
-std::filesystem::path mutated_trace(const std::filesystem::path& fixture,
-                                    const std::filesystem::path& cases,
-                                    const std::string& name,
-                                    const std::function<void(std::string&)>& edit) {
+std::filesystem::path mutated_trace(
+    const std::filesystem::path& fixture, const std::filesystem::path& cases,
+    const std::string& name,
+    const std::function<void(std::string&)>& edit) {
   const std::filesystem::path root = cases / name;
   std::filesystem::copy(fixture, root,
                         std::filesystem::copy_options::recursive);
@@ -66,6 +66,14 @@ std::filesystem::path mutated_trace(const std::filesystem::path& fixture,
   edit(metadata);
   write_text(root / "metadata.json", metadata);
   return root;
+}
+
+void make_v2_metadata(std::string& metadata, const std::string& profile,
+                      const std::string& semantics = "linear-no-bias") {
+  replace_once(metadata, "  \"format_version\": 1,\n",
+               "  \"format_version\": 2,\n"
+               "  \"profile\": \"" + profile + "\",\n"
+               "  \"output_semantics\": \"" + semantics + "\",\n");
 }
 
 }  // namespace
@@ -76,9 +84,11 @@ int main(int argc, char** argv) {
       throw std::runtime_error("usage: test_pvu_qwen3_trace FIXTURE BAD_TRACE");
     }
 
-    const pvu::Qwen3Trace trace = pvu::load_qwen3_trace(argv[1]);
-    require(trace.model == "fixture", "fixture model identity mismatch");
-    require(trace.modules.size() == 6, "fixture module count mismatch");
+    const pvu::LlmTrace trace = pvu::load_llm_trace(argv[1]);
+    require(trace.format_version == 1 && trace.model == "fixture",
+            "legacy fixture identity mismatch");
+    require(trace.profile == "legacy-qwen3-v1" && trace.modules.size() == 6,
+            "legacy fixture compatibility mismatch");
     require(trace.modules.at("q_proj").input.shape ==
                 std::vector<size_t>({1, 4}),
             "fixture q_proj input shape mismatch");
@@ -92,22 +102,22 @@ int main(int argc, char** argv) {
         [](std::string& metadata) {
           replace_once(metadata, "      \"dtype\": \"float32-le\",\n", "");
         });
-    require_throws([&] { (void)pvu::load_qwen3_trace(missing_key.string()); },
+    require_throws([&] { (void)pvu::load_llm_trace(missing_key.string()); },
                    "missing modules[0].dtype", "missing dtype was not rejected");
 
     const auto wrong_dtype = mutated_trace(argv[1], cases, "wrong-dtype",
         [](std::string& metadata) {
           replace_once(metadata, "\"float32-le\"", "\"float32-be\"");
         });
-    require_throws([&] { (void)pvu::load_qwen3_trace(wrong_dtype.string()); },
+    require_throws([&] { (void)pvu::load_llm_trace(wrong_dtype.string()); },
                    "dtype must be float32-le", "wrong dtype was not rejected");
 
     const auto bias = mutated_trace(argv[1], cases, "bias",
         [](std::string& metadata) {
           replace_once(metadata, "\"has_bias\": false", "\"has_bias\": true");
         });
-    require_throws([&] { (void)pvu::load_qwen3_trace(bias.string()); },
-                   "unsupported bias", "bias-bearing module was not rejected");
+    require_throws([&] { (void)pvu::load_llm_trace(bias.string()); },
+                   "unsupported bias", "v1 bias was not rejected");
 
     const auto nonfinite = mutated_trace(argv[1], cases, "nonfinite",
         [](std::string&) {});
@@ -121,17 +131,8 @@ int main(int argc, char** argv) {
       output.write(reinterpret_cast<const char*>(zeros.data()),
                    sizeof(zeros));
     }
-    require_throws([&] { (void)pvu::load_qwen3_trace(nonfinite.string()); },
+    require_throws([&] { (void)pvu::load_llm_trace(nonfinite.string()); },
                    "non-finite value", "non-finite operand was not rejected");
-
-    const auto wrong_tokens = mutated_trace(argv[1], cases, "wrong-tokens",
-        [](std::string& metadata) {
-          replace_once(metadata, "\"model\": \"fixture\"",
-                       "\"model\": \"/root/models/Qwen3-0.6B\"");
-        });
-    require_throws([&] { (void)pvu::load_qwen3_trace(wrong_tokens.string()); },
-                   "requires exactly 16 input tokens",
-                   "nonfixture one-token trace was not rejected");
 
     const auto bad_k = mutated_trace(argv[1], cases, "bad-k",
         [](std::string& metadata) {
@@ -140,72 +141,78 @@ int main(int argc, char** argv) {
           replace_once(metadata, "\"weight_shape\": [4, 4]",
                        "\"weight_shape\": [4, 3]");
         });
-    require_throws([&] { (void)pvu::load_qwen3_trace(bad_k.string()); },
+    require_throws([&] { (void)pvu::load_llm_trace(bad_k.string()); },
                    "divisible by four", "nondivisible K was not rejected");
 
-    const auto wrong_model = mutated_trace(argv[1], cases, "wrong-model",
+    const auto v2 = mutated_trace(argv[1], cases, "v2",
         [](std::string& metadata) {
+          make_v2_metadata(metadata, "gemma3-1b");
           replace_once(metadata, "\"model\": \"fixture\"",
-                       "\"model\": \"/root/models/Qwen3-1.7B\"");
+                       "\"model\": \"/root/models/gemma-3-1b-it\"");
+          replace_once(metadata, "\"has_bias\": false", "\"has_bias\": true");
         });
-    require_throws([&] { (void)pvu::load_qwen3_trace(wrong_model.string()); },
-                   "Qwen3-0.6B", "wrong production model was not rejected");
+    const pvu::LlmTrace v2_trace = pvu::load_llm_trace(v2.string());
+    require(v2_trace.format_version == 2 && v2_trace.profile == "gemma3-1b" &&
+                v2_trace.output_semantics == "linear-no-bias" &&
+                v2_trace.modules.size() == 6,
+            "v2 generic trace was not accepted");
 
-    const auto wrong_dimensions = mutated_trace(argv[1], cases, "wrong-dimensions",
+    const auto missing_profile = mutated_trace(argv[1], cases, "missing-profile",
         [](std::string& metadata) {
-          replace_once(metadata, "\"model\": \"fixture\"",
-                       "\"model\": \"/root/models/Qwen3-0.6B\"");
-          replace_once(metadata,
-                       "\"input_token_ids\": [\n    0\n  ]",
-                       "\"input_token_ids\": [0, 1, 2, 3, 4, 5, 6, 7, "
-                       "8, 9, 10, 11, 12, 13, 14, 15]");
+          replace_once(metadata, "\"format_version\": 1", "\"format_version\": 2");
         });
-    require_throws(
-        [&] { (void)pvu::load_qwen3_trace(wrong_dimensions.string()); },
-        "Qwen3-0.6B tensor dimensions",
-        "wrong production dimensions were not rejected by the model contract");
+    require_throws([&] { (void)pvu::load_llm_trace(missing_profile.string()); },
+                   "missing root.profile", "v2 trace without profile was accepted");
+
+    const auto wrong_semantics = mutated_trace(argv[1], cases, "wrong-semantics",
+        [](std::string& metadata) {
+          make_v2_metadata(metadata, "phi4-mini", "module-output");
+        });
+    require_throws([&] { (void)pvu::load_llm_trace(wrong_semantics.string()); },
+                   "output_semantics", "nonlinear v2 output semantics was accepted");
 
     char arg0[] = "reader-test";
     char arg1[] = "test_src/qwen3-p32-fixture";
     char arg2[] = "1";
     char arg3[] = "4";
-    char* selection_argv[] = {arg0, arg1, arg2, arg3};
-    const pvu::Qwen3Selection selection =
-        pvu::parse_qwen3_selection(4, selection_argv);
-    require(selection.trace_root == arg1 && selection.token_count == 1 &&
-                selection.row_count == 4,
-            "explicit selection mismatch");
+    char arg4[] = "3";
+    char* selection_argv[] = {arg0, arg1, arg2, arg3, arg4};
+    const pvu::LlmSelection selection = pvu::parse_llm_selection(5, selection_argv);
+    require(selection.trace_root == arg1 && selection.m == 1 &&
+                selection.n == 4 && selection.k == 3,
+            "explicit MNK selection mismatch");
 
-    if (setenv("QWEN3_TRACE_DIR", argv[1], 1) != 0) {
-      throw std::runtime_error("failed to set QWEN3_TRACE_DIR");
+    if (setenv("LLM_P32_TRACE_DIR", argv[1], 1) != 0) {
+      throw std::runtime_error("failed to set LLM_P32_TRACE_DIR");
     }
     char* environment_argv[] = {arg0};
-    const pvu::Qwen3Selection environment_selection =
-        pvu::parse_qwen3_selection(1, environment_argv);
+    const pvu::LlmSelection environment_selection =
+        pvu::parse_llm_selection(1, environment_argv);
     require(environment_selection.trace_root == argv[1],
-            "QWEN3_TRACE_DIR selection mismatch");
-    unsetenv("QWEN3_TRACE_DIR");
+            "LLM_P32_TRACE_DIR selection mismatch");
+    unsetenv("LLM_P32_TRACE_DIR");
 
     require_throws(
-        [&] { (void)pvu::parse_qwen3_selection(1, environment_argv); },
-        "QWEN3_TRACE_DIR", "missing trace selection fell back to fixture");
+        [&] { (void)pvu::parse_llm_selection(1, environment_argv); },
+        "LLM_P32_TRACE_DIR", "missing trace selection fell back to fixture");
 
-    char zero_count[] = "00";
+    char zero_count[] = "0";
     char* zero_argv[] = {arg0, arg1, zero_count};
-    require_throws(
-        [&] { (void)pvu::parse_qwen3_selection(3, zero_argv); }, "",
-        "zero token count was not rejected");
+    const pvu::LlmSelection zero_selection =
+        pvu::parse_llm_selection(3, zero_argv);
+    require(zero_selection.m == 0,
+            "zero token count did not select automatic module sizing");
 
     char excess_rows[] = "5";
     char* excess_argv[] = {arg0, arg1, arg2, excess_rows};
     require_throws(
-        [&] { (void)pvu::parse_qwen3_selection(4, excess_argv); },
-        "row-count exceeds", "out-of-range row count was not rejected");
+        [&] { (void)pvu::parse_llm_selection(4, excess_argv); },
+        "N exceeds", "out-of-range N was not rejected");
 
     require_throws(
-        [&] { (void)pvu::load_qwen3_trace(argv[2]); },
-        "q_proj.input.f32: byte count",
-        "truncated q_proj.input.f32 did not report a byte count error");
+        [&] { (void)pvu::load_llm_trace(argv[2]); },
+        "q_proj.input.f32:",
+        "invalid q_proj input artifact was not rejected");
 
     require(pvu::p32_to_float(0x40000000u) == 1.0f,
             "SoftPosit P32 conversion mismatch");
@@ -251,8 +258,7 @@ int main(int argc, char** argv) {
             "workload metrics mismatch");
 
     std::filesystem::remove_all(cases);
-
-    std::cout << "qwen3 trace reader tests passed\n";
+    std::cout << "llm trace reader tests passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

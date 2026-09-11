@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+make -C "$repo_root" -n menuconfig | rg "^menuconfig$"
+actual=$(make -C "$repo_root" -n run \
+  "CONFIG_LLM_P32_MAC_WORKLOAD=y" \
+  "CONFIG_LLM_P32_MAC_TRACE_DIR=/tmp/llm;echo injected" \
+  "CONFIG_MATRIX_GEMM_P32_M=2" \
+  "CONFIG_MATRIX_GEMM_P32_N=3" \
+  "CONFIG_MATRIX_GEMM_P32_K=5" | rg "^./obj_dir/VPvuTop")
+expected="./obj_dir/VPvuTop  \"/tmp/llm;echo injected\" \"2\" \"3\" \"5\""
+
+if [[ "$actual" != "$expected" ]]; then
+  printf "expected shell-quoted Kconfig trace arguments:\n  %s\nactual:\n  %s\n" "$expected" "$actual" >&2
+  exit 1
+fi
+
+printf "LLM Kconfig trace arguments are shell-quoted\n"
