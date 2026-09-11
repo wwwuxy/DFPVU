@@ -109,43 +109,6 @@ menu "RESNET_TEST"
             and utilization metrics. The trace profile selects the intended
             model family; model weights are never downloaded by make.
 
-    config LLM_P32_CONVERSION_WORKLOAD
-        bool "llm_p32_conversion_workload"
-        default n
-        help
-            Replay exported LLM tensor values through both directions of the
-            Posit32 and IEEE FP32 conversion datapath. The runner reports
-            conversion throughput, exact SoftPosit conformance, and FP32
-            round-trip loss for the selected trace tensor source.
-
-    config LLM_P32_DOT_WORKLOAD
-        bool "llm_p32_dot_workload"
-        default n
-        help
-            Replay four-element input and projection-weight vector pairs from
-            exported LLM linear layers through the Posit32 Dot datapath. The
-            runner reports exact SoftPosit conformance, Dot throughput, and
-            observational FP32 numerical loss.
-
-    config LLM_P32_MUL_WORKLOAD
-        bool "llm_p32_mul_workload"
-        default n
-        help
-            Replay four-element input and projection-weight vector pairs from
-            exported LLM linear layers through the Posit32 vector multiply
-            datapath. Each lane is checked independently against SoftPosit,
-            and the runner reports vector and element throughput plus
-            observational P32-versus-FP32 multiplication loss.
-
-    config LLM_P32_TO_INT_WORKLOAD
-        bool "llm_p32_to_int_workload"
-        default n
-        help
-            Replay actual LLM activation, weight, or linear-output values
-            through the Posit32-to-Int32 datapath. The runner reports exact
-            SoftPosit conformance, conversion throughput, saturation count,
-            and integerization error relative to the source FP32 values.
-
     config MATRIX_GEMM_P32_BENCHMARK
         bool "matrix_gemm_p32_throughput_benchmark"
         default n
@@ -161,9 +124,6 @@ if MATRIX_GEMM_P32_BENCHMARK || LLM_P32_MAC_WORKLOAD
 choice
     prompt "P32 MNK test shape"
     default MATRIX_GEMM_P32_PRESET_TAIL_K2
-    help
-        Select the M, N, K dimensions. The matrix benchmark uses this as its
-        full GEMM shape; an LLM workload uses it as a real trace tile.
 
 config MATRIX_GEMM_P32_PRESET_TAIL_K1
     bool "Tail K=1: M=2, N=3, K=1"
@@ -250,10 +210,10 @@ config MATRIX_GEMM_P32_K
 
 endif
 
-if LLM_P32_MAC_WORKLOAD || LLM_P32_CONVERSION_WORKLOAD || LLM_P32_DOT_WORKLOAD || LLM_P32_MUL_WORKLOAD || LLM_P32_TO_INT_WORKLOAD
+if LLM_P32_MAC_WORKLOAD
 
 choice
-    prompt "LLM P32 trace profile"
+    prompt "LLM P32 MAC trace profile"
     default LLM_P32_PROFILE_QWEN3_0_6B
 
 config LLM_P32_PROFILE_QWEN3_0_6B
@@ -267,206 +227,15 @@ config LLM_P32_PROFILE_PHI4_MINI
 
 endchoice
 
-config LLM_P32_MODEL_DIR
-    string "LLM local model directory"
-    default "/root/models/Qwen3-0.6B" if LLM_P32_PROFILE_QWEN3_0_6B
-    default "/root/models/gemma-3-1b-it" if LLM_P32_PROFILE_GEMMA3_1B
-    default "/root/models/phi-4-mini-instruct" if LLM_P32_PROFILE_PHI4_MINI
-    help
-        Local Hugging Face model directory for the selected profile. The
-        default paths match the three downloaded models. Change this only
-        when the models are stored elsewhere.
-
-config LLM_P32_AUTO_EXPORT_TRACE
-    bool "Automatically export a missing LLM trace"
-    default y
-    help
-        On the first make run, export a layer-0 attention projection from the
-        selected local model into the trace directory. Export is offline and
-        uses 128 tokens, covering every supplied MNK preset. Existing traces
-        are not overwritten. Disable this to require a manually exported
-        trace instead.
-
 config LLM_P32_MAC_TRACE_DIR
-    string "LLM P32 trace directory"
+    string "LLM P32 MAC trace directory"
     default "/tmp/qwen3-0.6b-p32-trace" if LLM_P32_PROFILE_QWEN3_0_6B
     default "/tmp/gemma-3-1b-p32-trace" if LLM_P32_PROFILE_GEMMA3_1B
     default "/tmp/phi-4-mini-p32-trace" if LLM_P32_PROFILE_PHI4_MINI
     help
-        Trace output directory for the selected model. With automatic export
-        enabled, make run creates this trace from the local model when its
-        metadata.json is missing. Existing complete traces are reused.
-
-if LLM_P32_CONVERSION_WORKLOAD
-
-choice
-    prompt "LLM conversion trace tensor"
-    default LLM_P32_CONVERSION_TENSOR_INPUT
-    help
-        Select the real tensor distribution replayed by the op=7 conversion
-        workload. Input and output are activations; weight is the projection
-        parameter distribution.
-
-config LLM_P32_CONVERSION_TENSOR_INPUT
-    bool "Layer input activation"
-
-config LLM_P32_CONVERSION_TENSOR_WEIGHT
-    bool "Projection weight"
-
-config LLM_P32_CONVERSION_TENSOR_OUTPUT
-    bool "Linear output activation"
-
-endchoice
-
-config LLM_P32_CONVERSION_TENSOR
-    string
-    default "input" if LLM_P32_CONVERSION_TENSOR_INPUT
-    default "weight" if LLM_P32_CONVERSION_TENSOR_WEIGHT
-    default "output" if LLM_P32_CONVERSION_TENSOR_OUTPUT
-
-choice
-    prompt "LLM conversion samples per module"
-    default LLM_P32_CONVERSION_SAMPLES_256
-    help
-        Select a deterministic, evenly spaced number of scalar elements from
-        each exported module tensor. A tensor smaller than the selection is
-        replayed in full without duplicate samples.
-
-config LLM_P32_CONVERSION_SAMPLES_256
-    bool "256 elements"
-
-config LLM_P32_CONVERSION_SAMPLES_1024
-    bool "1024 elements"
-
-config LLM_P32_CONVERSION_SAMPLES_4096
-    bool "4096 elements"
-
-endchoice
-
-
-config LLM_P32_CONVERSION_SAMPLE_COUNT
-    int
-    range 1 65536
-    default 256 if LLM_P32_CONVERSION_SAMPLES_256
-    default 1024 if LLM_P32_CONVERSION_SAMPLES_1024
-    default 4096 if LLM_P32_CONVERSION_SAMPLES_4096
-
-endif
-
-if LLM_P32_DOT_WORKLOAD
-
-choice
-    prompt "LLM Dot samples per module"
-    default LLM_P32_DOT_SAMPLES_256
-    help
-        Select a deterministic, evenly spaced number of four-element
-        input-times-weight Dot vectors from each exported linear module.
-        A module with fewer vectors is replayed in full without duplicates.
-
-config LLM_P32_DOT_SAMPLES_256
-    bool "256 Dot vectors"
-
-config LLM_P32_DOT_SAMPLES_1024
-    bool "1024 Dot vectors"
-
-config LLM_P32_DOT_SAMPLES_4096
-    bool "4096 Dot vectors"
-
-endchoice
-
-config LLM_P32_DOT_SAMPLE_COUNT
-    int
-    range 1 65536
-    default 256 if LLM_P32_DOT_SAMPLES_256
-    default 1024 if LLM_P32_DOT_SAMPLES_1024
-    default 4096 if LLM_P32_DOT_SAMPLES_4096
-
-endif
-if LLM_P32_MUL_WORKLOAD
-
-choice
-    prompt "LLM Multiply samples per module"
-    default LLM_P32_MUL_SAMPLES_256
-    help
-        Select a deterministic, evenly spaced number of four-element
-        input-times-weight vectors from each exported linear module. Each
-        vector becomes one four-lane P32 multiply request; a smaller module
-        is replayed in full without duplicate samples.
-
-config LLM_P32_MUL_SAMPLES_256
-    bool "256 Multiply vectors"
-
-config LLM_P32_MUL_SAMPLES_1024
-    bool "1024 Multiply vectors"
-
-config LLM_P32_MUL_SAMPLES_4096
-    bool "4096 Multiply vectors"
-
-endchoice
-
-config LLM_P32_MUL_SAMPLE_COUNT
-    int
-    range 1 65536
-    default 256 if LLM_P32_MUL_SAMPLES_256
-    default 1024 if LLM_P32_MUL_SAMPLES_1024
-    default 4096 if LLM_P32_MUL_SAMPLES_4096
-
-endif
-
-if LLM_P32_TO_INT_WORKLOAD
-
-choice
-    prompt "LLM P32-to-Int trace tensor"
-    default LLM_P32_TO_INT_TENSOR_INPUT
-    help
-        Select the real LLM tensor distribution converted from Posit32 to
-        Int32. Input and output are activations; weight is the projection
-        parameter distribution.
-
-config LLM_P32_TO_INT_TENSOR_INPUT
-    bool "Layer input activation"
-
-config LLM_P32_TO_INT_TENSOR_WEIGHT
-    bool "Projection weight"
-
-config LLM_P32_TO_INT_TENSOR_OUTPUT
-    bool "Linear output activation"
-
-endchoice
-
-config LLM_P32_TO_INT_TENSOR
-    string
-    default "input" if LLM_P32_TO_INT_TENSOR_INPUT
-    default "weight" if LLM_P32_TO_INT_TENSOR_WEIGHT
-    default "output" if LLM_P32_TO_INT_TENSOR_OUTPUT
-
-choice
-    prompt "LLM P32-to-Int samples per module"
-    default LLM_P32_TO_INT_SAMPLES_256
-    help
-        Select a deterministic, evenly spaced number of scalar elements from
-        each exported module tensor. A tensor smaller than the selection is
-        replayed in full without duplicate samples.
-
-config LLM_P32_TO_INT_SAMPLES_256
-    bool "256 elements"
-
-config LLM_P32_TO_INT_SAMPLES_1024
-    bool "1024 elements"
-
-config LLM_P32_TO_INT_SAMPLES_4096
-    bool "4096 elements"
-
-endchoice
-
-config LLM_P32_TO_INT_SAMPLE_COUNT
-    int
-    range 1 65536
-    default 256 if LLM_P32_TO_INT_SAMPLES_256
-    default 1024 if LLM_P32_TO_INT_SAMPLES_1024
-    default 4096 if LLM_P32_TO_INT_SAMPLES_4096
-
-endif
+        Directory produced by tools/export_llm_p32_trace.py. The runner never
+        falls back to a fixture and make run reports an error when this path
+        is invalid.
 
 endif
 

@@ -643,22 +643,15 @@ inline LlmSelection parse_llm_selection(int argc, char** argv) {
     selection.n = qwen3_trace_detail::parse_nonnegative_argument(argv[3], "N");
   }
 
-  if (argc >= 5) {
-    selection.k = qwen3_trace_detail::parse_nonnegative_argument(argv[4], "K");
-  }
   const LlmTrace trace = load_llm_trace(selection.trace_root);
   for (const auto& entry : trace.modules) {
     const LinearModuleTrace& module = entry.second;
-    if (selection.m > module.input.shape[0]) {
-      throw std::runtime_error("M exceeds " + entry.first +
+    if (selection.token_count > module.input.shape[0]) {
+      throw std::runtime_error("token-count exceeds " + entry.first +
                                " metadata dimension");
     }
-    if (selection.n > module.weight.shape[0]) {
-      throw std::runtime_error("N exceeds " + entry.first +
-                               " metadata dimension");
-    }
-    if (selection.k > module.input.shape[1]) {
-      throw std::runtime_error("K exceeds " + entry.first +
+    if (selection.row_count > module.weight.shape[0]) {
+      throw std::runtime_error("row-count exceeds " + entry.first +
                                " metadata dimension");
     }
   }

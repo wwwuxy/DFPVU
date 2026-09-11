@@ -27,9 +27,9 @@ constexpr uint8_t kP32MacOp = 11;
 constexpr uint64_t kNoProgressLimit = 64;
 
 struct BenchmarkOptions {
-  size_t m = 4;
-  size_t n = 4;
-  size_t k = 5;
+  size_t m = CONFIG_MATRIX_GEMM_P32_M;
+  size_t n = CONFIG_MATRIX_GEMM_P32_N;
+  size_t k = CONFIG_MATRIX_GEMM_P32_K;
   uint64_t seed = 1;
 };
 
@@ -69,81 +69,6 @@ size_t checked_product(size_t lhs, size_t rhs, const std::string& label) {
     throw std::runtime_error(label + " overflows host size_t");
   }
   return lhs * rhs;
-}
-
-bool has_decimal_digits(const std::string& value) {
-  return !value.empty() &&
-         std::all_of(value.begin(), value.end(), [](unsigned char character) {
-           return character >= '0' && character <= '9';
-         });
-}
-
-size_t parse_positive_size(const char* text, const std::string& option) {
-  const std::string value(text);
-  if (!has_decimal_digits(value)) {
-    throw std::runtime_error(option + " must be a positive integer");
-  }
-  size_t parsed_characters = 0;
-  uint64_t parsed = 0;
-  try {
-    parsed = std::stoull(value, &parsed_characters, 10);
-  } catch (const std::exception&) {
-    throw std::runtime_error(option + " must be a positive integer");
-  }
-  if (parsed_characters != value.size() || parsed == 0 ||
-      parsed > std::numeric_limits<size_t>::max()) {
-    throw std::runtime_error(option + " must be a positive integer");
-  }
-  return static_cast<size_t>(parsed);
-}
-
-uint64_t parse_positive_seed(const char* text) {
-  const std::string value(text);
-  if (!has_decimal_digits(value)) {
-    throw std::runtime_error("--seed must be a positive integer");
-  }
-  size_t parsed_characters = 0;
-  uint64_t parsed = 0;
-  try {
-    parsed = std::stoull(value, &parsed_characters, 10);
-  } catch (const std::exception&) {
-    throw std::runtime_error("--seed must be a positive integer");
-  }
-  if (parsed_characters != value.size() || parsed == 0) {
-    throw std::runtime_error("--seed must be a positive integer");
-  }
-  return parsed;
-}
-
-BenchmarkOptions parse_options(int argc, char** argv) {
-  BenchmarkOptions options;
-  for (int index = 1; index < argc; ++index) {
-    const std::string option(argv[index]);
-    if (option == "--help") {
-      throw std::runtime_error(
-          "usage: VPvuTop [--m M] [--n N] [--k K] [--seed SEED]");
-    }
-    if (option != "--m" && option != "--n" && option != "--k" &&
-        option != "--seed") {
-      throw std::runtime_error("unknown option: " + option);
-    }
-    if (++index == argc) {
-      throw std::runtime_error("missing value for " + option);
-    }
-    if (option == "--m") {
-      options.m = parse_positive_size(argv[index], option);
-    } else if (option == "--n") {
-      options.n = parse_positive_size(argv[index], option);
-    } else if (option == "--k") {
-      options.k = parse_positive_size(argv[index], option);
-    } else {
-      options.seed = parse_positive_seed(argv[index]);
-    }
-  }
-  checked_product(options.m, options.k, "A matrix size");
-  checked_product(options.k, options.n, "B matrix size");
-  checked_product(options.m, options.n, "C matrix size");
-  return options;
 }
 
 uint64_t next_random(uint64_t& state) {
@@ -433,18 +358,20 @@ void print_report(const BenchmarkOptions& options,
           : static_cast<double>(metrics.valid_mac_terms) /
                 static_cast<double>(metrics.requests * kLanes);
 
-  std::cout << "Matrix GEMM P32 benchmark: M=" << options.m
-            << " N=" << options.n << " K=" << options.k
-            << " seed=" << options.seed << std::endl;
-  std::cout << std::fixed << std::setprecision(6)
-            << "  requests=" << metrics.requests
-            << " valid_mac_terms=" << metrics.valid_mac_terms
-            << " cycles=" << metrics.cycles
-            << " request_per_cycle=" << request_per_cycle
-            << " mac_per_cycle=" << mac_per_cycle
-            << " lane_utilization=" << lane_utilization
-            << " max_chain_latency=" << metrics.max_chain_latency
-            << " exact_mismatches=" << exact_mismatches << std::endl;
+  std::cout << "Matrix GEMM P32 benchmark" << std::endl;
+  std::cout << "  M: " << options.m << std::endl;
+  std::cout << "  N: " << options.n << std::endl;
+  std::cout << "  K: " << options.k << std::endl;
+  std::cout << "  seed: " << options.seed << std::endl;
+  std::cout << std::fixed << std::setprecision(6);
+  std::cout << "  requests: " << metrics.requests << std::endl;
+  std::cout << "  valid_mac_terms: " << metrics.valid_mac_terms << std::endl;
+  std::cout << "  cycles: " << metrics.cycles << std::endl;
+  std::cout << "  request_per_cycle: " << request_per_cycle << std::endl;
+  std::cout << "  mac_per_cycle: " << mac_per_cycle << std::endl;
+  std::cout << "  lane_utilization: " << lane_utilization << std::endl;
+  std::cout << "  max_chain_latency: " << metrics.max_chain_latency << std::endl;
+  std::cout << "  exact_mismatches: " << exact_mismatches << std::endl;
   std::cout
       << "M,N,K,seed,requests,valid_mac_terms,cycles,request_per_cycle,"
          "mac_per_cycle,lane_utilization,max_chain_latency,exact_mismatches"
@@ -459,9 +386,13 @@ void print_report(const BenchmarkOptions& options,
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main() {
   try {
-    const BenchmarkOptions options = parse_options(argc, argv);
+    const BenchmarkOptions options;
+    checked_product(options.m, options.k, "A matrix size");
+    checked_product(options.k, options.n, "B matrix size");
+    checked_product(options.m, options.n, "C matrix size");
+
     const Matrix a = make_matrix(options.m, options.k, options.seed);
     const Matrix b = make_matrix(options.k, options.n,
                                  options.seed ^ UINT64_C(0x9e3779b97f4a7c15));

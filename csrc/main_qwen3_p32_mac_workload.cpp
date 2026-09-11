@@ -1,6 +1,6 @@
 #include "../config.h"
 
-#ifdef CONFIG_QWEN3_P32_MAC_WORKLOAD
+#ifdef CONFIG_LLM_P32_MAC_WORKLOAD
 
 #include <algorithm>
 #include <array>
@@ -33,12 +33,13 @@ std::string hex32(uint32_t value) {
 }
 
 void require_element_bounds(const pvu::LinearModuleTrace& module, size_t token,
-                            size_t row) {
+                            size_t row, size_t selected_k) {
   if (module.input.shape.size() != 2 || module.weight.shape.size() != 2 ||
       module.input.shape[1] != module.weight.shape[1] ||
-      module.input.shape[1] == 0 || module.input.shape[1] % kLanes != 0 ||
-      token >= module.input.shape[0] || row >= module.weight.shape[0]) {
-    throw std::runtime_error("invalid P32 MAC element selection");
+      module.input.shape[1] == 0 || selected_k == 0 ||
+      selected_k > module.input.shape[1] || token >= module.input.shape[0] ||
+      row >= module.weight.shape[0]) {
+    throw std::runtime_error("invalid P32 MAC tile selection");
   }
 }
 
@@ -62,6 +63,7 @@ class Driver {
     std::array<uint32_t, kLanes> weights;
     uint32_t accumulator;
     uint32_t tag;
+    uint8_t valid_lanes;
   };
 
   uint32_t next_tag() { return next_tag_++; }
@@ -98,7 +100,7 @@ class Driver {
     dut_.io_float_posit = 1;
     dut_.io_src_posit_width = 32;
     dut_.io_dst_posit_width = 32;
-    dut_.io_vector_size = kLanes;
+    dut_.io_vector_size = request->valid_lanes;
     dut_.eval();
   }
 
@@ -152,12 +154,14 @@ struct HeldRequest {
 
 Driver::P32MacRequest make_p32_mac_request(
     Driver& driver, const pvu::LinearModuleTrace& module,
-    const ElementState& element) {
+    const ElementState& element, size_t selected_k) {
   const size_t k_width = module.input.shape[1];
   Driver::P32MacRequest request{};
   request.accumulator = element.accumulator;
   request.tag = driver.next_tag();
-  for (size_t lane = 0; lane < kLanes; ++lane) {
+  request.valid_lanes = static_cast<uint8_t>(
+      std::min(kLanes, selected_k - element.next_k));
+  for (size_t lane = 0; lane < request.valid_lanes; ++lane) {
     request.activations[lane] = pvu::float_to_p32(
         module.input.values[element.coordinate.token * k_width +
                             element.next_k + lane]);
@@ -170,18 +174,18 @@ Driver::P32MacRequest make_p32_mac_request(
 
 std::vector<uint32_t> run_p32_mac_elements(
     Driver& driver, const pvu::LinearModuleTrace& module,
-    const std::vector<ElementCoordinate>& coordinates,
+    const std::vector<ElementCoordinate>& coordinates, size_t selected_k,
     pvu::WorkloadMetrics& metrics) {
   const size_t k_width = module.input.shape[1];
   std::vector<ElementState> elements;
   elements.reserve(coordinates.size());
   for (const ElementCoordinate coordinate : coordinates) {
-    require_element_bounds(module, coordinate.token, coordinate.row);
+    require_element_bounds(module, coordinate.token, coordinate.row, selected_k);
     elements.push_back({coordinate});
   }
 
   std::vector<uint32_t> results(coordinates.size());
-  std::unordered_map<uint32_t, size_t> outstanding_by_tag;
+  std::unordered_map<uint32_t, std::pair<size_t, uint8_t>> outstanding_by_tag;
   HeldRequest held{};
   bool has_held_request = false;
   size_t completed = 0;
@@ -196,7 +200,7 @@ std::vector<uint32_t> run_p32_mac_elements(
         ElementState& element = elements[element_index];
         if (!element.complete && !element.waiting_for_response) {
           held = {element_index,
-                  make_p32_mac_request(driver, module, element)};
+                  make_p32_mac_request(driver, module, element, selected_k)};
           has_held_request = true;
           break;
         }
@@ -215,16 +219,17 @@ std::vector<uint32_t> run_p32_mac_elements(
       if (response == outstanding_by_tag.end()) {
         throw std::runtime_error("P32 MAC response tag/op mismatch");
       }
-      ElementState& element = elements[response->second];
+      const std::pair<size_t, uint8_t> outstanding = response->second;
+      ElementState& element = elements[outstanding.first];
       if (!element.waiting_for_response) {
         throw std::runtime_error("P32 MAC response tag/op mismatch");
       }
       element.accumulator = driver.out_result();
-      element.next_k += kLanes;
+      element.next_k += outstanding.second;
       element.waiting_for_response = false;
-      const size_t element_index = response->second;
+      const size_t element_index = outstanding.first;
       outstanding_by_tag.erase(response);
-      if (element.next_k == k_width) {
+      if (element.next_k == selected_k) {
         element.complete = true;
         results[element_index] = element.accumulator;
         ++completed;
@@ -238,13 +243,16 @@ std::vector<uint32_t> run_p32_mac_elements(
       }
       element.waiting_for_response = true;
       const auto inserted =
-          outstanding_by_tag.emplace(held.request.tag, held.element_index);
+          outstanding_by_tag.emplace(
+          held.request.tag, std::make_pair(held.element_index,
+                                           held.request.valid_lanes));
       if (!inserted.second) {
         throw std::runtime_error("P32 MAC scheduler duplicate tag");
       }
       has_held_request = false;
       ++metrics.requests;
-      metrics.active_lanes += kLanes;
+      metrics.valid_mac_terms += held.request.valid_lanes;
+      metrics.active_lanes += held.request.valid_lanes;
     }
 
     if (accepted_request || accepted_response) {
@@ -259,12 +267,12 @@ std::vector<uint32_t> run_p32_mac_elements(
 }
 
 uint32_t ref_p32_mac_element(const pvu::LinearModuleTrace& module,
-                             size_t token, size_t row) {
-  require_element_bounds(module, token, row);
+                             size_t token, size_t row, size_t selected_k) {
+  require_element_bounds(module, token, row, selected_k);
   const size_t k_width = module.input.shape[1];
   uint32_t accumulator = 0;
-  for (size_t k = 0; k < k_width; k += kLanes) {
-    for (size_t lane = 0; lane < kLanes; ++lane) {
+  for (size_t k = 0; k < selected_k; k += kLanes) {
+    for (size_t lane = 0; lane < std::min(kLanes, selected_k - k); ++lane) {
       const uint32_t activation =
           pvu::float_to_p32(module.input.values[token * k_width + k + lane]);
       const uint32_t weight =
@@ -276,12 +284,12 @@ uint32_t ref_p32_mac_element(const pvu::LinearModuleTrace& module,
 }
 
 float ref_fp32_mac_element(const pvu::LinearModuleTrace& module, size_t token,
-                           size_t row) {
-  require_element_bounds(module, token, row);
+                           size_t row, size_t selected_k) {
+  require_element_bounds(module, token, row, selected_k);
   const size_t k_width = module.input.shape[1];
   float accumulator = 0.0F;
-  for (size_t k = 0; k < k_width; k += kLanes) {
-    for (size_t lane = 0; lane < kLanes; ++lane) {
+  for (size_t k = 0; k < selected_k; k += kLanes) {
+    for (size_t lane = 0; lane < std::min(kLanes, selected_k - k); ++lane) {
       accumulator = std::fma(module.input.values[token * k_width + k + lane],
                              module.weight.values[row * k_width + k + lane],
                              accumulator);
@@ -300,21 +308,22 @@ struct ModuleReport {
 };
 
 float pytorch_output_element(const pvu::LinearModuleTrace& module,
-                             size_t token, size_t row) {
-  require_element_bounds(module, token, row);
+                             size_t token, size_t row, size_t selected_k) {
+  require_element_bounds(module, token, row, selected_k);
   return module.output.values[token * module.output.shape[1] + row];
 }
 
 void verify_elements(Driver& driver, const std::string& module_name,
                      const pvu::LinearModuleTrace& module,
                      const std::vector<ElementCoordinate>& coordinates,
-                     ModuleReport& report) {
+                     size_t selected_k, ModuleReport& report) {
   const std::vector<uint32_t> hardware =
-      run_p32_mac_elements(driver, module, coordinates, report.workload);
+      run_p32_mac_elements(driver, module, coordinates, selected_k,
+                           report.workload);
   for (size_t index = 0; index < coordinates.size(); ++index) {
     const ElementCoordinate coordinate = coordinates[index];
     const uint32_t expected =
-        ref_p32_mac_element(module, coordinate.token, coordinate.row);
+        ref_p32_mac_element(module, coordinate.token, coordinate.row, selected_k);
     ++report.elements;
     if (hardware[index] != expected) {
       ++report.exact_mismatches;
@@ -329,10 +338,12 @@ void verify_elements(Driver& driver, const std::string& module_name,
     }
     report.ordered_fp32.add(
         hardware[index],
-        ref_fp32_mac_element(module, coordinate.token, coordinate.row));
-    report.pytorch_output.add(
-        hardware[index],
-        pytorch_output_element(module, coordinate.token, coordinate.row));
+        ref_fp32_mac_element(module, coordinate.token, coordinate.row, selected_k));
+    if (selected_k == module.input.shape[1]) {
+      report.pytorch_output.add(
+          hardware[index], pytorch_output_element(module, coordinate.token,
+                                                   coordinate.row, selected_k));
+    }
   }
 }
 
@@ -340,6 +351,7 @@ void merge_workload(pvu::WorkloadMetrics& total,
                     const pvu::WorkloadMetrics& module) {
   total.cycles += module.cycles;
   total.requests += module.requests;
+  total.valid_mac_terms += module.valid_mac_terms;
   total.active_lanes += module.active_lanes;
 }
 
@@ -362,7 +374,7 @@ void print_comparison_stats(const std::string& name,
 
 void print_cycle_report(const std::string& name,
                         const pvu::WorkloadMetrics& metrics) {
-  const uint64_t mac_terms = metrics.requests * kLanes;
+  const uint64_t mac_terms = metrics.valid_mac_terms;
   const double requests_per_cycle =
       metrics.cycles == 0
           ? 0.0
@@ -385,10 +397,10 @@ void print_cycle_report(const std::string& name,
             << " lane utilization=" << lane_utilization << std::endl;
 }
 
-void print_workload_summary(const pvu::Qwen3Trace& trace,
+void print_workload_summary(const pvu::LlmTrace& trace,
                             uint64_t selected_elements,
                             const pvu::WorkloadMetrics& metrics) {
-  const uint64_t mac_terms = metrics.requests * kLanes;
+  const uint64_t mac_terms = metrics.valid_mac_terms;
   const double requests_per_cycle =
       metrics.cycles == 0
           ? 0.0
@@ -405,7 +417,7 @@ void print_workload_summary(const pvu::Qwen3Trace& trace,
                 static_cast<double>(mac_terms);
   std::cout << "Workload summary" << std::endl;
   std::cout << std::fixed << std::setprecision(6)
-            << "  trace model=" << trace.model
+            << "  trace model=" << trace.model << " profile=" << trace.profile
             << " selected elements=" << selected_elements
             << " MAC requests=" << metrics.requests
             << " MAC terms=" << mac_terms << " cycles=" << metrics.cycles
@@ -443,42 +455,32 @@ void print_precision_conclusion(const pvu::ComparisonStats& ordered_fp32,
 
 int main(int argc, char** argv) {
   try {
-    const pvu::Qwen3Selection selection =
-        pvu::parse_qwen3_selection(argc, argv);
-    const pvu::Qwen3Trace trace = pvu::load_qwen3_trace(selection.trace_root);
-    if (trace.modules.size() != 6 ||
-        trace.modules.at("q_proj").input.shape.size() != 2) {
-      throw std::runtime_error("trace contract mismatch");
-    }
+    const pvu::LlmSelection selection = pvu::parse_llm_selection(argc, argv);
+    const pvu::LlmTrace trace = pvu::load_llm_trace(selection.trace_root);
 
     VPvuTop dut;
     Driver driver(dut);
     driver.reset();
     std::map<std::string, ModuleReport> reports;
     for (const auto& named_module : trace.modules) {
+      const pvu::LinearModuleTrace& module = named_module.second;
       ModuleReport report;
-      const size_t token_count =
-          selection.token_count == 0
-              ? trace.modules.at("q_proj").input.shape.at(0)
-              : selection.token_count;
-      const size_t row_count =
-          selection.row_count == 0
-              ? std::min<size_t>(64, named_module.second.weight.shape.at(0))
-              : selection.row_count;
+      const size_t m = selection.m == 0 ? module.input.shape.at(0) : selection.m;
+      const size_t n = selection.n == 0
+                           ? std::min<size_t>(64, module.weight.shape.at(0))
+                           : selection.n;
+      const size_t k = selection.k == 0 ? module.input.shape.at(1) : selection.k;
       std::vector<ElementCoordinate> coordinates;
-      coordinates.reserve(token_count * row_count);
-      for (size_t token = 0; token < token_count; ++token) {
-        for (size_t index = 0; index < row_count; ++index) {
+      coordinates.reserve(m * n);
+      for (size_t token = 0; token < m; ++token) {
+        for (size_t index = 0; index < n; ++index) {
           const size_t row =
-              row_count == 1
-                  ? 0
-                  : index * (named_module.second.weight.shape.at(0) - 1) /
-                        (row_count - 1);
+              n == 1 ? 0 : index * (module.weight.shape.at(0) - 1) / (n - 1);
           coordinates.push_back({token, row});
         }
       }
-      verify_elements(driver, named_module.first, named_module.second,
-                      coordinates, report);
+      verify_elements(driver, named_module.first, module, coordinates, k,
+                      report);
       reports.emplace(named_module.first, std::move(report));
     }
 
@@ -500,6 +502,10 @@ int main(int argc, char** argv) {
       }
     }
 
+    std::cout << "LLM P32 MNK tile" << std::endl;
+    std::cout << "  M: " << selection.m << std::endl;
+    std::cout << "  N: " << selection.n << std::endl;
+    std::cout << "  K: " << selection.k << std::endl;
     std::cout << "Hardware vs SoftPosit (Verilator workload data)" << std::endl;
     for (const auto& named_report : reports) {
       const ModuleReport& report = named_report.second;
@@ -518,7 +524,7 @@ int main(int argc, char** argv) {
     }
     print_comparison_stats("overall", total_ordered_fp32);
 
-    std::cout << "Posit vs PyTorch output (Verilator workload data; observational)"
+    std::cout << "Posit vs exported pre-bias FP32 (full-K tiles only; observational)"
               << std::endl;
     for (const auto& named_report : reports) {
       print_comparison_stats(named_report.first,
@@ -541,9 +547,9 @@ int main(int argc, char** argv) {
     }
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
-    std::cerr << "Qwen3 trace error: " << error.what() << std::endl;
+    std::cerr << "LLM trace error: " << error.what() << std::endl;
     return EXIT_FAILURE;
   }
 }
 
-#endif  // CONFIG_QWEN3_P32_MAC_WORKLOAD
+#endif  // CONFIG_LLM_P32_MAC_WORKLOAD
