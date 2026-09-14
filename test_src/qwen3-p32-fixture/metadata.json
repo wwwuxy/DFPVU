@@ -35,6 +35,15 @@
       "has_bias": false
     },
     {
+      "name": "self_attn.o_proj",
+      "artifact_prefix": "o_proj",
+      "input_shape": [1, 4],
+      "weight_shape": [4, 4],
+      "output_shape": [1, 4],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
       "name": "mlp.gate_proj",
       "artifact_prefix": "gate_proj",
       "input_shape": [1, 4],

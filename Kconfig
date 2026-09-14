@@ -118,6 +118,16 @@ menu "RESNET_TEST"
             conversion throughput, exact SoftPosit conformance, and FP32
             round-trip loss for the selected trace tensor source.
 
+
+    config LLM_P32_TO_P16_WORKLOAD
+        bool "llm_p32_to_p16_workload"
+        default n
+        help
+            Replay captured LLM activation, weight, or pre-bias output values
+            through Posit32-to-Posit16 conversion. Raw output is checked
+            exactly against SoftPosit; P16 reconstructed to P32 statistics are
+            observational only and do not claim end-to-end model quantization.
+
     config LLM_P32_DOT_WORKLOAD
         bool "llm_p32_dot_workload"
         default n
@@ -145,6 +155,15 @@ menu "RESNET_TEST"
             through the Posit32-to-Int32 datapath. The runner reports exact
             SoftPosit conformance, conversion throughput, saturation count,
             and integerization error relative to the source FP32 values.
+
+    config LLM_P32_ADD_WORKLOAD
+        bool "llm_p32_add_workload"
+        default n
+        help
+            Replay actual same-shape binary tensor additions captured during
+            local LLM forward execution through the Posit32 vector Add
+            datapath. The runner checks every active lane against SoftPosit
+            and reports ready/valid throughput plus FP32 observation metrics.
 
     config MATRIX_GEMM_P32_BENCHMARK
         bool "matrix_gemm_p32_throughput_benchmark"
@@ -250,7 +269,7 @@ config MATRIX_GEMM_P32_K
 
 endif
 
-if LLM_P32_MAC_WORKLOAD || LLM_P32_CONVERSION_WORKLOAD || LLM_P32_DOT_WORKLOAD || LLM_P32_MUL_WORKLOAD || LLM_P32_TO_INT_WORKLOAD
+if LLM_P32_MAC_WORKLOAD || LLM_P32_CONVERSION_WORKLOAD || LLM_P32_TO_P16_WORKLOAD || LLM_P32_DOT_WORKLOAD || LLM_P32_MUL_WORKLOAD || LLM_P32_TO_INT_WORKLOAD || LLM_P32_ADD_WORKLOAD
 
 choice
     prompt "LLM P32 trace profile"
@@ -267,15 +286,40 @@ config LLM_P32_PROFILE_PHI4_MINI
 
 endchoice
 
-config LLM_P32_MODEL_DIR
-    string "LLM local model directory"
-    default "/root/models/Qwen3-0.6B" if LLM_P32_PROFILE_QWEN3_0_6B
-    default "/root/models/gemma-3-1b-it" if LLM_P32_PROFILE_GEMMA3_1B
-    default "/root/models/phi-4-mini-instruct" if LLM_P32_PROFILE_PHI4_MINI
+choice
+    prompt "LLM model and trace path mode"
+    default LLM_P32_PATH_MODE_PROFILE_DEFAULTS
     help
-        Local Hugging Face model directory for the selected profile. The
-        default paths match the three downloaded models. Change this only
-        when the models are stored elsewhere.
+        Profile defaults keep the model and trace roots synchronized when
+        switching among Qwen3, Gemma, and Phi. Custom paths are opt-in.
+
+config LLM_P32_PATH_MODE_PROFILE_DEFAULTS
+    bool "Use paths provided by the selected profile"
+
+config LLM_P32_PATH_MODE_CUSTOM
+    bool "Use custom model and trace paths"
+
+endchoice
+
+if LLM_P32_PATH_MODE_CUSTOM
+
+config LLM_P32_MODEL_DIR
+    string "Custom LLM local model directory"
+    default ""
+    help
+        Override the selected profile's standard local model directory.
+
+if ! LLM_P32_ADD_WORKLOAD
+
+config LLM_P32_MAC_TRACE_DIR
+    string "Custom LLM P32 trace directory"
+    default ""
+    help
+        Override the selected profile's standard linear trace directory.
+
+endif
+
+endif
 
 config LLM_P32_AUTO_EXPORT_TRACE
     bool "Automatically export a missing LLM trace"
@@ -287,17 +331,7 @@ config LLM_P32_AUTO_EXPORT_TRACE
         are not overwritten. Disable this to require a manually exported
         trace instead.
 
-config LLM_P32_MAC_TRACE_DIR
-    string "LLM P32 trace directory"
-    default "/tmp/qwen3-0.6b-p32-trace" if LLM_P32_PROFILE_QWEN3_0_6B
-    default "/tmp/gemma-3-1b-p32-trace" if LLM_P32_PROFILE_GEMMA3_1B
-    default "/tmp/phi-4-mini-p32-trace" if LLM_P32_PROFILE_PHI4_MINI
-    help
-        Trace output directory for the selected model. With automatic export
-        enabled, make run creates this trace from the local model when its
-        metadata.json is missing. Existing complete traces are reused.
-
-if LLM_P32_CONVERSION_WORKLOAD
+if LLM_P32_CONVERSION_WORKLOAD || LLM_P32_TO_P16_WORKLOAD
 
 choice
     prompt "LLM conversion trace tensor"
@@ -467,6 +501,46 @@ config LLM_P32_TO_INT_SAMPLE_COUNT
     default 4096 if LLM_P32_TO_INT_SAMPLES_4096
 
 endif
+
+if LLM_P32_ADD_WORKLOAD
+
+if LLM_P32_PATH_MODE_CUSTOM
+
+config LLM_P32_ADD_TRACE_DIR
+    string "Custom LLM P32 Add trace directory"
+    default ""
+    help
+        Override the selected profile's dedicated Add trace directory.
+
+endif
+
+choice
+    prompt "LLM P32 Add elements per captured operation"
+    default LLM_P32_ADD_SAMPLES_256
+    help
+        Select a deterministic, evenly spaced number of scalar Add elements
+        from every captured real model-forward Add operation.
+
+config LLM_P32_ADD_SAMPLES_256
+    bool "256 Add elements"
+
+config LLM_P32_ADD_SAMPLES_1024
+    bool "1024 Add elements"
+
+config LLM_P32_ADD_SAMPLES_4096
+    bool "4096 Add elements"
+
+endchoice
+
+config LLM_P32_ADD_SAMPLE_COUNT
+    int
+    range 1 65536
+    default 256 if LLM_P32_ADD_SAMPLES_256
+    default 1024 if LLM_P32_ADD_SAMPLES_1024
+    default 4096 if LLM_P32_ADD_SAMPLES_4096
+
+endif
+
 
 endif
 

@@ -9,19 +9,30 @@ fixture="$repo_root/test_src/qwen3-p32-fixture"
 output=$(mktemp)
 trap 'rm -f "$output"' EXIT
 
-"$runner" "$fixture" >"$output"
+check_conversion() {
+  local source=$1 source_elements=$2 sampled_elements=$3 requests=$4
 
-rg -x -F 'LLM P32 conversion workload' "$output"
-rg -x -F '  tensor_source: input' "$output"
-rg -x -F '  source_elements: 24' "$output"
-rg -x -F '  sampled_elements: 24' "$output"
-rg -x -F '  fp32_to_p32_requests: 6' "$output"
-rg -x '  fp32_to_p32_cycles: [1-9][0-9]*' "$output"
-rg -x -F '  fp32_to_p32_exact_mismatches: 0' "$output"
-rg -x -F '  p32_to_fp32_requests: 6' "$output"
-rg -x '  p32_to_fp32_cycles: [1-9][0-9]*' "$output"
-rg -x -F '  p32_to_fp32_exact_mismatches: 0' "$output"
-rg -x -F '  round_trip_samples: 24' "$output"
-rg -x -F '  conformance: PASS' "$output"
+  "$runner" "$fixture" "$source" 5 >"$output"
 
-printf 'LLM P32 conversion fixture: 24 values, two exact op=7 directions\n'
+  rg -x -F 'LLM P32 conversion workload' "$output"
+  rg -x -F "  tensor_source: $source" "$output"
+  rg -x -F '  requested_samples_per_module: 5' "$output"
+  rg -x -F "  source_elements: $source_elements" "$output"
+  rg -x -F "  sampled_elements: $sampled_elements" "$output"
+  rg -x -F "  fp32_to_p32_requests: $requests" "$output"
+  rg -x '  fp32_to_p32_cycles: [1-9][0-9]*' "$output"
+  rg -x -F '  fp32_to_p32_exact_mismatches: 0' "$output"
+  rg -x -F "  p32_to_fp32_requests: $requests" "$output"
+  rg -x '  p32_to_fp32_cycles: [1-9][0-9]*' "$output"
+  rg -x -F '  p32_to_fp32_exact_mismatches: 0' "$output"
+  rg -x -F "  round_trip_samples: $sampled_elements" "$output"
+  rg -x -F '  conformance: PASS' "$output"
+}
+
+check_conversion input 28 28 7
+# Seven modules contribute five samples each; 35 values are issued in groups
+# of four PVU lanes, so ceil(35 / 4) is nine requests in each direction.
+check_conversion weight 112 35 9
+check_conversion output 28 28 7
+
+printf 'LLM P32 conversion fixture: input, weight, and output op=7 conformance\n'

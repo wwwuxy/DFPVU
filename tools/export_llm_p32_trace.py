@@ -37,6 +37,52 @@ def _trace_matrix(tensor):
         )
     return tensor.detach().to(device="cpu", dtype=torch.float32).contiguous().numpy()
 
+def _add_capture_mode(captures: list[dict]):
+    """Return a dispatch mode that snapshots eligible real tensor additions."""
+    import torch
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    class AddCaptureMode(TorchDispatchMode):
+        def __init__(self):
+            super().__init__()
+            self.collecting = False
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            if kwargs is None:
+                kwargs = {}
+            result = func(*args, **kwargs)
+            if self.collecting or func != torch.ops.aten.add.Tensor:
+                return result
+            alpha = kwargs.get("alpha", args[2] if len(args) > 2 else 1)
+            if alpha != 1 or len(args) < 2:
+                return result
+
+            self.collecting = True
+            try:
+                lhs = _trace_matrix(args[0]).copy()
+                rhs = _trace_matrix(args[1]).copy()
+                output = _trace_matrix(result).copy()
+            except (TypeError, ValueError):
+                return result
+            finally:
+                self.collecting = False
+
+            if lhs.shape != rhs.shape or lhs.shape != output.shape:
+                return result
+            index = len(captures)
+            captures.append(
+                {
+                    "name": f"add.{index:03d}",
+                    "artifact_prefix": f"{index:03d}_add",
+                    "lhs": lhs,
+                    "rhs": rhs,
+                    "output": output,
+                }
+            )
+            return result
+
+    return AddCaptureMode()
+
 
 def _decoder_layer(model, layer_index: int):
     import torch
@@ -98,7 +144,10 @@ def _selected_linear_modules(layer, requested_paths: list[str]):
     return selected
 
 
-def capture_linear_modules(model, layer_index: int, input_ids, requested_paths: list[str]):
+def capture_linear_modules(
+    model, layer_index: int, input_ids, requested_paths: list[str],
+    add_captures: list[dict] | None = None,
+):
     """Capture invoked linear modules and export a bias-free FP32 reference output."""
     import torch
 
@@ -134,7 +183,11 @@ def capture_linear_modules(model, layer_index: int, input_ids, requested_paths: 
             handles.append(module.register_forward_hook(forward_hook))
 
         with torch.no_grad():
-            model(input_ids=input_ids, use_cache=False)
+            if add_captures is None:
+                model(input_ids=input_ids, use_cache=False)
+            else:
+                with _add_capture_mode(add_captures):
+                    model(input_ids=input_ids, use_cache=False)
     finally:
         for handle in handles:
             handle.remove()
@@ -167,9 +220,17 @@ def write_trace(
     token_ids: list[int],
     layer_index: int,
     captures: list[dict],
+    add_captures: list[dict] | None = None,
+    *,
+    linear_module_scope: str,
 ) -> None:
     """Write a self-describing v2 trace with pre-bias linear references."""
+    if linear_module_scope not in {"all-decoder-linear", "explicit-subset"}:
+        raise ValueError(
+            "linear_module_scope must be 'all-decoder-linear' or 'explicit-subset'"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
+    add_captures = [] if add_captures is None else add_captures
     descriptors = []
     for capture in captures:
         prefix = capture["artifact_prefix"]
@@ -187,16 +248,32 @@ def write_trace(
             }
         )
 
+    add_descriptors = []
+    for capture in add_captures:
+        prefix = capture["artifact_prefix"]
+        for tensor_name in ("lhs", "rhs", "output"):
+            write_tensor(output_dir / f"{prefix}.{tensor_name}.f32", capture[tensor_name])
+        add_descriptors.append(
+            {
+                "name": capture["name"],
+                "artifact_prefix": prefix,
+                "shape": list(capture["lhs"].shape),
+                "dtype": "float32-le",
+            }
+        )
     metadata = {
         "format_version": 2,
         "profile": profile,
         "output_semantics": "linear-no-bias",
+        "linear_module_scope": linear_module_scope,
         "model": str(model_path),
         "prompt": prompt,
         "input_token_ids": [int(token_id) for token_id in token_ids],
         "layer_index": layer_index,
         "modules": descriptors,
     }
+    if add_captures:
+        metadata["add_operations"] = add_descriptors
     (output_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
     )
@@ -217,6 +294,11 @@ def main() -> None:
         help="relative decoder-layer path to export; repeat to select an explicit subset",
     )
     parser.add_argument("--trust-remote-code", action="store_true")
+    parser.add_argument(
+        "--capture-add",
+        action="store_true",
+        help="capture same-shape binary tensor additions from the real model forward",
+    )
     arguments = parser.parse_args()
 
     import torch
@@ -233,9 +315,16 @@ def main() -> None:
         trust_remote_code=arguments.trust_remote_code,
     )
     model.eval()
+    add_captures = [] if arguments.capture_add else None
     captures = capture_linear_modules(
-        model, arguments.layer, input_ids, arguments.module
+        model, arguments.layer, input_ids, arguments.module,
+        add_captures=add_captures,
     )
+    linear_module_scope = (
+        "explicit-subset" if arguments.module else "all-decoder-linear"
+    )
+    if arguments.capture_add and not add_captures:
+        raise RuntimeError("model forward exposed no eligible binary tensor additions")
     write_trace(
         arguments.output,
         arguments.model,
@@ -244,6 +333,8 @@ def main() -> None:
         token_ids,
         arguments.layer,
         captures,
+        add_captures,
+        linear_module_scope=linear_module_scope,
     )
 
 
