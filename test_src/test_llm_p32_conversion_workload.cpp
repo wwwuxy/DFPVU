@@ -50,6 +50,16 @@ int main() {
                 module, pvu::LlmConversionTensor::kOutput) == &module.output,
             "output conversion source selection mismatch");
 
+    require(std::string(pvu::llm_conversion_tensor_name(
+                pvu::LlmConversionTensor::kInput)) == "input",
+            "input conversion source name mismatch");
+    require(std::string(pvu::llm_conversion_tensor_name(
+                pvu::LlmConversionTensor::kWeight)) == "weight",
+            "weight conversion source name mismatch");
+    require(std::string(pvu::llm_conversion_tensor_name(
+                pvu::LlmConversionTensor::kOutput)) == "output",
+            "output conversion source name mismatch");
+
     const pvu::LlmConversionSamples samples =
         pvu::sample_llm_conversion_tensor(module.weight, 4);
     require(samples.source_elements == 8 &&

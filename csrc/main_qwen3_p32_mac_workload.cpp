@@ -479,6 +479,10 @@ int main(int argc, char** argv) {
           coordinates.push_back({token, row});
         }
       }
+      std::cout << "  " << module.name << ": trace_shape=M"
+                << module.input.shape.at(0) << " N" << module.weight.shape.at(0)
+                << " K" << module.input.shape.at(1) << " replay_tile=M" << m
+                << " N" << n << " K" << k << std::endl;
       verify_elements(driver, named_module.first, module, coordinates, k,
                       report);
       reports.emplace(named_module.first, std::move(report));

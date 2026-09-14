@@ -1,16 +1,18 @@
-# LLM P32 MAC workload
+# LLM trace-backed P32 workloads
 
-该框架将本地开权重 LLM 指定 decoder layer 中实际执行的线性层导出为 trace，再通过既有四 lane `op=11` Posit<32,2> MAC 数据通路回放。当前测试范围固定为三个稠密模型：Qwen3-0.6B、Gemma 3 1B 和 Phi-4-mini-instruct。
+该框架将本地开权重 LLM 指定 decoder layer 中实际执行的线性层导出为 trace，并可额外捕获真实前向的二元张量 Add；各 workload 分别通过既有四 lane Posit<32,2> 数据通路回放。当前测试范围固定为三个稠密模型：Qwen3-0.6B、Gemma 3 1B 和 Phi-4-mini-instruct。
 
 模型权重和 Python 环境由使用者持有；`make` 不联网、不会下载模型，也不会回退到测试 fixture。启用默认的自动导出后，`make run` 会在 trace 首次缺失时仅从本地模型生成它。
 
 ## Kconfig profile
 
-| Profile | 默认本地模型目录 | 默认 trace 目录 | 自动导出模块 |
-| --- | --- | --- | --- |
-| `Qwen3-0.6B` | `/root/models/Qwen3-0.6B` | `/tmp/qwen3-0.6b-p32-trace` | `self_attn.q_proj` |
-| `Gemma 3 1B` | `/root/models/gemma-3-1b-it` | `/tmp/gemma-3-1b-p32-trace` | `self_attn.q_proj` |
-| `Phi-4-mini-instruct` | `/root/models/phi-4-mini-instruct` | `/tmp/phi-4-mini-p32-trace` | `self_attn.qkv_proj` |
+| Profile | 默认本地模型目录 | 默认线性 trace 目录 | 默认 Add trace 目录 | 默认导出范围 |
+| --- | --- | --- | --- | --- |
+| `Qwen3-0.6B` | `/root/models/Qwen3-0.6B` | `/tmp/qwen3-0.6b-p32-linear-trace` | `/tmp/qwen3-0.6b-p32-add-trace` | 当前 layer 全部实际执行的 rank-2 线性模块 |
+| `Gemma 3 1B` | `/root/models/gemma-3-1b-it` | `/tmp/gemma-3-1b-p32-linear-trace` | `/tmp/gemma-3-1b-p32-add-trace` | 当前 layer 全部实际执行的 rank-2 线性模块 |
+| `Phi-4-mini-instruct` | `/root/models/phi-4-mini-instruct` | `/tmp/phi-4-mini-p32-linear-trace` | `/tmp/phi-4-mini-p32-add-trace` | 当前 layer 全部实际执行的 rank-2 线性模块 |
+
+`LLM model and trace path mode` 默认选择 `Use paths provided by the selected profile`。在该模式下切换 profile 时，`make run` 始终使用上表中该 profile 对应的模型与 trace 目录，不会沿用 `.config` 中旧 profile 的字符串路径。模型或 trace 放在非标准位置时，选择 `Use custom model and trace paths`，再填写出现的自定义目录；自定义模式才会使用这些值。
 
 ## 手动下载模型
 
@@ -28,7 +30,7 @@ hf download microsoft/Phi-4-mini-instruct \
 
 ## 导出 trace
 
-导出器写入格式版本 2：每个模块都有 row-major、little-endian `float32` 的 `.input.f32`、`.weight.f32` 和 `.output.f32` 文件。`output` 始终是 `F.linear(input, weight, bias=None)` 的 FP32 参考值；若原始模型层有 bias，metadata 仅记录 `has_bias=true`，当前 MAC 硬件不会执行 bias。
+导出器写入格式版本 2：每个模块都有 row-major、little-endian `float32` 的 `.input.f32`、`.weight.f32` 和 `.output.f32` 文件。`output` 始终是 `F.linear(input, weight, bias=None)` 的 FP32 参考值；若原始模型层有 bias，metadata 仅记录 `has_bias=true`，当前 MAC 硬件不会执行 bias。指定 `--capture-add` 时，同一份 metadata 额外记录 `add_operations`；其中每个真实模型前向二元 Add 都有同形状的 `.lhs.f32`、`.rhs.f32` 与 `.output.f32` 工件。
 
 Gemma 3 1B 示例：
 
@@ -36,7 +38,7 @@ Gemma 3 1B 示例：
 /root/qwen312-venv/bin/python tools/export_llm_p32_trace.py \
   --profile gemma3-1b \
   --model /root/models/gemma-3-1b-it \
-  --output /tmp/gemma-3-1b-p32-trace \
+  --output /tmp/gemma-3-1b-p32-linear-trace \
   --tokens 16 \
   --layer 0
 ```
@@ -47,7 +49,7 @@ Phi-4-mini 示例：
 /root/qwen312-venv/bin/python tools/export_llm_p32_trace.py \
   --profile phi4-mini \
   --model /root/models/phi-4-mini-instruct \
-  --output /tmp/phi-4-mini-p32-trace \
+  --output /tmp/phi-4-mini-p32-linear-subset-trace \
   --tokens 16 \
   --module self_attn.qkv_proj
 ```
@@ -58,7 +60,7 @@ Phi-4-mini 示例：
 /root/qwen312-venv/bin/python tools/export_llm_p32_trace.py \
   --profile phi4-mini \
   --model /root/models/phi-4-mini-instruct \
-  --output /tmp/phi-4-mini-p32-trace \
+  --output /tmp/phi-4-mini-p32-linear-subset-trace \
   --tokens 16 \
   --module self_attn.qkv_proj \
   --module mlp.down_proj
@@ -80,6 +82,7 @@ make menuconfig
 
 - `llm_p32_mac_workload`；
 - `LLM P32 trace profile` 中的 Qwen3-0.6B、Gemma 3 1B 或 Phi-4-mini-instruct；
+- 保持 `LLM model and trace path mode` 的 `Use paths provided by the selected profile`；
 - `P32 MNK test shape` 中的待测 MNK。
 
 三个 profile 已分别预置本地模型目录和 trace 目录。保持 `Automatically export a missing LLM trace` 为启用，然后直接运行：
@@ -88,7 +91,7 @@ make menuconfig
 make run
 ```
 
-首次运行若缺少 `metadata.json`，`make run` 会通过 `/root/qwen312-venv/bin/python` 从选中本地模型离线导出 layer 0 的代表性 attention projection（Qwen3/Gemma 为 `self_attn.q_proj`，Phi 为 `self_attn.qkv_proj`），并固定导出 128 个 token，覆盖所有内置 MNK preset。后续运行复用该 trace；v2 trace 的 metadata profile 必须与当前 Kconfig 模型一致，不一致时 make run 会拒绝运行；`make` 不联网、不下载模型，也不会覆盖不含 metadata 的非空目录。模型不在默认路径时，在 Kconfig 修改 `LLM local model directory`；Python 环境位于其他路径时，运行 `LLM_P32_PYTHON=/path/to/python make run`。
+首次运行若缺少 `metadata.json`，`make run` 会通过 `/root/qwen312-venv/bin/python` 从选中本地模型离线导出 layer 0 中本次前向实际执行的全部 rank-2 线性模块，并固定导出 128 个 token，覆盖所有内置 MNK preset。后续运行复用该 trace；v2 trace 的 metadata profile 必须与当前 Kconfig 模型一致，不一致时 make run 会拒绝运行；`make` 不联网、不下载模型，也不会覆盖不含 metadata 的非空目录。模型不在预置路径时，先在 Kconfig 选择 `Use custom model and trace paths`，再修改 `Custom LLM local model directory` 与相应 trace 目录；Python 环境位于其他路径时，运行 `LLM_P32_PYTHON=/path/to/python make run`。
 
 该菜单与普通矩阵 benchmark 共享同一组 preset，但 LLM 模式将其解释为真实 trace 的 `M×K · K×N` tile：取前 M 个 token、均匀选择 N 个输出通道、取前 K 个输入通道。当 K 小于模块原始 K 时，框架报告的是 tile 精度，不将其与完整线性层输出比较。
 
@@ -177,3 +180,31 @@ make run
 采样空间、顺序和约束与 Dot workload 相同：对输入 `[tokens, K]` 和权重 `[N, K]`，共有 `tokens × N × (K/4)` 个候选向量；框架按四元素 K 块、输出行、token 的固定顺序等距选取，包含首尾，超出可用数时不重复回放，且 K 必须能被 4 整除。它不使用 MNK preset，也不重新导出模型或修改 RTL。
 
 输出一行一个指标。`source_mul_vectors` 和 `sampled_mul_vectors` 分别是可用和实际回放的四 lane 请求数；`request_per_cycle`/`vector_per_cycle` 是向量请求吞吐，`element_per_cycle` 将每个请求计为 4 次独立乘法。每一条 lane 的两个 FP32 操作数都会先按既有路径转换为 P32，硬件输出逐条与 SoftPosit `p32_mul` 的原始 P32 结果比较；只有 `exact_mismatches: 0` 且 `conformance: PASS` 时，`p32_vs_fp32_*`（硬件 P32 值相对原始 FP32 乘积）的误差统计才可用于实验结论。
+
+## LLM P32 Add workload
+
+Add workload 捕获真实 LLM 前向中的二元张量加法，并将每个扁平化标量对作为 PVU `op=1` 的 Posit32 加法回放。导出器只保留 `aten.add.Tensor`、`alpha=1`、去除 batch 维后左右操作数及输出均为同一二维形状的操作；这覆盖常见的残差加法，同时避免将广播、缩放或形状变化的算子伪装成逐元素 Add。
+
+在 `RESNET_TEST` -> `Posit<32, 2>` 中选择 `llm_p32_add_workload`，然后选择：
+
+- `LLM P32 trace profile`：Qwen3-0.6B、Gemma 3 1B 或 Phi-4-mini-instruct；
+- 默认路径模式会自动选择该 profile 的独立 Add trace 目录；仅在 `Use custom model and trace paths` 下填写 `Custom LLM P32 Add trace directory`；
+- `LLM P32 Add elements per captured operation`：每个已捕获 Add 的 256、1024 或 4096 个标量元素。
+
+随后直接运行：
+
+```bash
+make run
+```
+
+首次运行会在离线模式下从选中的本地模型执行一次前向，并自动加上 `--capture-add`；随后 `make run` 复用包含 `add_operations` 的 trace。采样在每个 Add 的扁平化元素空间内等距且确定性地覆盖首尾；小于选择数的 Add 只回放一次全部元素。运行器将连续元素打包为最多四 lane 的 tagged ready/valid 请求，最后不足四个元素的请求仅比较有效 lane。
+
+`exact_mismatches` 是硬件结果相对 SoftPosit `p32_add` 原始 P32 结果的强制一致性门，非零即失败。`p32_vs_fp32_*` 则将硬件 P32 结果转换为 FP32 后与模型原始 Add 输出比较，描述量化误差；只有 `exact_mismatches: 0` 且 `conformance: PASS` 时，该数值误差和 `request_per_cycle`/`element_per_cycle` 才可作为实验结果。它们是捕获 Add 算子的 RTL 回放指标，不是端到端模型推理吞吐。
+
+## Multi-linear and P32-to-P16 experiment boundary
+
+默认 profile trace 是 decoder layer 内全部实际执行的线性投影的 trace-backed 实验：Attention 的 `q_proj`、`k_proj`、`v_proj`、`o_proj`（或模型真实的融合路径）以及 MLP 的 gate/up/down 投影都可作为 `op=11` MAC 回放输入。每个模块报告源 `M/N/K` 与有界 replay tile；这描述真实投影的 MAC workload，而不是端到端推理。
+
+`llm_p32_conversion_workload` 使用 `op=7` 对真实 `input`、`weight`、pre-bias `output` 分别测 FP32↔P32；`llm_p32_to_p16_workload` 使用 `op=6` 测 P32→P16。二者的 Hardware-vs-SoftPosit raw-bit 相等是强制 conformance 门；P32/P16 回构相对 FP32 的 ULP、相对误差和绝对误差仅为观察性数值指标。P32→P16 不是完整模型量化或模型质量评估。
+
+当前 trace 不包含 Attention 子核所需的 Q/K、softmax 后概率或 RoPE sin/cos，也不包含 SwiGLU 两路激活、residual 两分支或 RMSNorm 的完整操作数。因此 QKᵀ、P×V、RoPE、Softmax、SwiGLU gating、residual 和 RMSNorm 均明确延后；尤其 Softmax 缺少 `exp`，RMSNorm 缺少 `sqrt/rsqrt`，不能据此宣称已覆盖完整 Attention、Softmax 或 RMSNorm。

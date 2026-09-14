@@ -21,6 +21,7 @@ SOFTPOSIT_REF_SRCS := \
 	$(SOFTPOSIT_ROOT)/source/p32_mulAdd.c \
 	$(SOFTPOSIT_ROOT)/source/p32_div.c \
 	$(SOFTPOSIT_ROOT)/source/p32_to_pX2.c \
+	$(SOFTPOSIT_ROOT)/source/p16_to_p32.c \
 	$(SOFTPOSIT_ROOT)/source/p32_to_i32.c \
 	$(SOFTPOSIT_ROOT)/source/i32_to_p32.c \
 	$(SOFTPOSIT_ROOT)/source/c_convertDecToPosit32.c \
@@ -40,7 +41,6 @@ include .config
 
 PVU_RUN_ARGS :=
 
-LLM_P32_TRACE_DIR := $(subst ",,$(CONFIG_LLM_P32_MAC_TRACE_DIR))
 LLM_P32_MAC_M := $(CONFIG_MATRIX_GEMM_P32_M)
 LLM_P32_MAC_N := $(CONFIG_MATRIX_GEMM_P32_N)
 LLM_P32_MAC_K := $(CONFIG_MATRIX_GEMM_P32_K)
@@ -50,9 +50,12 @@ LLM_P32_DOT_SAMPLE_COUNT := $(or $(CONFIG_LLM_P32_DOT_SAMPLE_COUNT),256)
 LLM_P32_MUL_SAMPLE_COUNT := $(or $(CONFIG_LLM_P32_MUL_SAMPLE_COUNT),256)
 LLM_P32_TO_INT_TENSOR := $(subst ",,$(or $(CONFIG_LLM_P32_TO_INT_TENSOR),input))
 LLM_P32_TO_INT_SAMPLE_COUNT := $(or $(CONFIG_LLM_P32_TO_INT_SAMPLE_COUNT),256)
+LLM_P32_ADD_SAMPLE_COUNT := $(or $(CONFIG_LLM_P32_ADD_SAMPLE_COUNT),256)
 
 LLM_P32_CONFIG_MODEL_DIR := $(subst ",,$(CONFIG_LLM_P32_MODEL_DIR))
 LLM_P32_AUTO_EXPORT_TRACE := $(if $(CONFIG_LLM_P32_AUTO_EXPORT_TRACE),$(CONFIG_LLM_P32_AUTO_EXPORT_TRACE),y)
+LLM_P32_CONFIG_MAC_TRACE_DIR := $(subst ",,$(CONFIG_LLM_P32_MAC_TRACE_DIR))
+LLM_P32_CONFIG_ADD_TRACE_DIR := $(subst ",,$(CONFIG_LLM_P32_ADD_TRACE_DIR))
 LLM_P32_PYTHON ?= /root/qwen312-venv/bin/python
 LLM_P32_TRACE_EXPORTER ?= tools/export_llm_p32_trace.py
 LLM_P32_EXPORT_TOKEN_COUNT ?= 128
@@ -60,20 +63,41 @@ LLM_P32_EXPORT_TOKEN_COUNT ?= 128
 ifeq ($(CONFIG_LLM_P32_PROFILE_QWEN3_0_6B),y)
 LLM_P32_TRACE_PROFILE := qwen3-0.6b
 LLM_P32_DEFAULT_MODEL_DIR := /root/models/Qwen3-0.6B
-LLM_P32_EXPORT_MODULE := self_attn.q_proj
+LLM_P32_DEFAULT_TRACE_DIR := /tmp/qwen3-0.6b-p32-linear-trace
+LLM_P32_DEFAULT_ADD_TRACE_DIR := /tmp/qwen3-0.6b-p32-add-trace
 endif
 ifeq ($(CONFIG_LLM_P32_PROFILE_GEMMA3_1B),y)
 LLM_P32_TRACE_PROFILE := gemma3-1b
 LLM_P32_DEFAULT_MODEL_DIR := /root/models/gemma-3-1b-it
-LLM_P32_EXPORT_MODULE := self_attn.q_proj
+LLM_P32_DEFAULT_TRACE_DIR := /tmp/gemma-3-1b-p32-linear-trace
+LLM_P32_DEFAULT_ADD_TRACE_DIR := /tmp/gemma-3-1b-p32-add-trace
 endif
 ifeq ($(CONFIG_LLM_P32_PROFILE_PHI4_MINI),y)
 LLM_P32_TRACE_PROFILE := phi4-mini
 LLM_P32_DEFAULT_MODEL_DIR := /root/models/phi-4-mini-instruct
-LLM_P32_EXPORT_MODULE := self_attn.qkv_proj
+LLM_P32_DEFAULT_TRACE_DIR := /tmp/phi-4-mini-p32-linear-trace
+LLM_P32_DEFAULT_ADD_TRACE_DIR := /tmp/phi-4-mini-p32-add-trace
 endif
-LLM_P32_MODEL_DIR := $(or $(LLM_P32_CONFIG_MODEL_DIR),$(LLM_P32_DEFAULT_MODEL_DIR))
-LLM_P32_WORKLOADS := $(filter y,$(CONFIG_LLM_P32_MAC_WORKLOAD) $(CONFIG_LLM_P32_CONVERSION_WORKLOAD) $(CONFIG_LLM_P32_DOT_WORKLOAD) $(CONFIG_LLM_P32_MUL_WORKLOAD) $(CONFIG_LLM_P32_TO_INT_WORKLOAD))
+ifeq ($(CONFIG_LLM_P32_PATH_MODE_CUSTOM),y)
+LLM_P32_MODEL_DIR := $(LLM_P32_CONFIG_MODEL_DIR)
+LLM_P32_TRACE_DIR := $(LLM_P32_CONFIG_MAC_TRACE_DIR)
+else
+LLM_P32_MODEL_DIR := $(LLM_P32_DEFAULT_MODEL_DIR)
+LLM_P32_TRACE_DIR := $(LLM_P32_DEFAULT_TRACE_DIR)
+ifneq ($(CONFIG_LLM_P32_ADD_WORKLOAD),y)
+LLM_P32_REQUIRE_ALL_LINEAR_TRACE := y
+endif
+endif
+ifeq ($(CONFIG_LLM_P32_ADD_WORKLOAD),y)
+ifeq ($(CONFIG_LLM_P32_PATH_MODE_CUSTOM),y)
+LLM_P32_TRACE_DIR := $(LLM_P32_CONFIG_ADD_TRACE_DIR)
+else
+LLM_P32_TRACE_DIR := $(LLM_P32_DEFAULT_ADD_TRACE_DIR)
+endif
+LLM_P32_EXPORT_OPTIONS := --capture-add
+endif
+
+LLM_P32_WORKLOADS := $(filter y,$(CONFIG_LLM_P32_MAC_WORKLOAD) $(CONFIG_LLM_P32_CONVERSION_WORKLOAD) $(CONFIG_LLM_P32_TO_P16_WORKLOAD) $(CONFIG_LLM_P32_DOT_WORKLOAD) $(CONFIG_LLM_P32_MUL_WORKLOAD) $(CONFIG_LLM_P32_TO_INT_WORKLOAD) $(CONFIG_LLM_P32_ADD_WORKLOAD))
 ifneq ($(LLM_P32_WORKLOADS),)
 ifneq ($(words $(LLM_P32_WORKLOADS)),1)
 $(error Select exactly one LLM P32 workload in Kconfig)
@@ -86,6 +110,9 @@ endif
 ifeq ($(CONFIG_LLM_P32_CONVERSION_WORKLOAD),y)
 PVU_RUN_ARGS += "$(LLM_P32_TRACE_DIR)" "$(LLM_P32_CONVERSION_TENSOR)" "$(LLM_P32_CONVERSION_SAMPLE_COUNT)"
 endif
+ifeq ($(CONFIG_LLM_P32_TO_P16_WORKLOAD),y)
+PVU_RUN_ARGS += "$(LLM_P32_TRACE_DIR)" "$(LLM_P32_CONVERSION_TENSOR)" "$(LLM_P32_CONVERSION_SAMPLE_COUNT)"
+endif
 ifeq ($(CONFIG_LLM_P32_DOT_WORKLOAD),y)
 PVU_RUN_ARGS += "$(LLM_P32_TRACE_DIR)" "$(LLM_P32_DOT_SAMPLE_COUNT)"
 endif
@@ -95,21 +122,34 @@ endif
 ifeq ($(CONFIG_LLM_P32_TO_INT_WORKLOAD),y)
 PVU_RUN_ARGS += "$(LLM_P32_TRACE_DIR)" "$(LLM_P32_TO_INT_TENSOR)" "$(LLM_P32_TO_INT_SAMPLE_COUNT)"
 endif
+ifeq ($(CONFIG_LLM_P32_ADD_WORKLOAD),y)
+PVU_RUN_ARGS += "$(LLM_P32_TRACE_DIR)" "$(LLM_P32_ADD_SAMPLE_COUNT)"
+endif
+
 
 ifneq ($(LLM_P32_WORKLOADS),)
 run: llm_p32_trace_config
-.PHONY: llm_p32_trace_config llm_p32_mac_trace_config
+.PHONY: llm_p32_trace_config llm_p32_mac_trace_config llm_p32_add_trace_config
 llm_p32_trace_config:
-	@test -n "$(LLM_P32_TRACE_DIR)" || { echo "CONFIG_LLM_P32_MAC_TRACE_DIR must name an LLM trace directory" >&2; exit 2; }
-	@if test -f "$(LLM_P32_TRACE_DIR)/metadata.json"; then if ! grep -q '"profile"' "$(LLM_P32_TRACE_DIR)/metadata.json"; then echo "LLM trace: reusing legacy trace without profile $(LLM_P32_TRACE_DIR)"; elif grep -Eq '"profile"[[:space:]]*:[[:space:]]*"$(LLM_P32_TRACE_PROFILE)"' "$(LLM_P32_TRACE_DIR)/metadata.json"; then echo "LLM trace: reusing $(LLM_P32_TRACE_DIR)"; else echo "LLM trace profile does not match selected Kconfig profile: expected $(LLM_P32_TRACE_PROFILE)" >&2; exit 2; fi; elif test "$(LLM_P32_AUTO_EXPORT_TRACE)" != "y"; then echo "LLM trace metadata is missing: $(LLM_P32_TRACE_DIR)/metadata.json" >&2; echo "Enable CONFIG_LLM_P32_AUTO_EXPORT_TRACE or export the trace manually." >&2; exit 2; elif test -z "$(LLM_P32_TRACE_PROFILE)" || test -z "$(LLM_P32_EXPORT_MODULE)"; then echo "Select one LLM P32 trace profile in Kconfig." >&2; exit 2; elif test ! -d "$(LLM_P32_MODEL_DIR)"; then echo "Local LLM model directory is missing: $(LLM_P32_MODEL_DIR)" >&2; echo "Set CONFIG_LLM_P32_MODEL_DIR in Kconfig to the downloaded model." >&2; exit 2; elif test ! -x "$(LLM_P32_PYTHON)"; then echo "LLM Python interpreter is missing or not executable: $(LLM_P32_PYTHON)" >&2; echo "Override LLM_P32_PYTHON with an environment containing torch and transformers." >&2; exit 2; elif test -d "$(LLM_P32_TRACE_DIR)" && test -n "$$(find "$(LLM_P32_TRACE_DIR)" -mindepth 1 -maxdepth 1 -print -quit)"; then echo "Refusing to overwrite non-empty trace directory without metadata.json: $(LLM_P32_TRACE_DIR)" >&2; exit 2; else echo "LLM trace: exporting $(LLM_P32_TRACE_PROFILE) from local model (offline, $(LLM_P32_EXPORT_TOKEN_COUNT) tokens)"; HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 "$(LLM_P32_PYTHON)" "$(LLM_P32_TRACE_EXPORTER)" --profile "$(LLM_P32_TRACE_PROFILE)" --model "$(LLM_P32_MODEL_DIR)" --output "$(LLM_P32_TRACE_DIR)" --tokens "$(LLM_P32_EXPORT_TOKEN_COUNT)" --layer 0 --module "$(LLM_P32_EXPORT_MODULE)"; fi
+	@test -n "$(LLM_P32_TRACE_DIR)" || { echo "LLM trace directory is empty; select a profile or configure a custom trace directory." >&2; exit 2; }
+	@if test -f "$(LLM_P32_TRACE_DIR)/metadata.json"; then if ! grep -q '"profile"' "$(LLM_P32_TRACE_DIR)/metadata.json"; then if test "$(LLM_P32_REQUIRE_ALL_LINEAR_TRACE)" = "y"; then echo "LLM default linear trace is not an all-decoder-linear export: $(LLM_P32_TRACE_DIR)" >&2; exit 2; else echo "LLM trace: reusing legacy trace without profile $(LLM_P32_TRACE_DIR)"; fi; elif ! grep -Eq '"profile"[[:space:]]*:[[:space:]]*"$(LLM_P32_TRACE_PROFILE)"' "$(LLM_P32_TRACE_DIR)/metadata.json"; then echo "LLM trace profile does not match selected Kconfig profile: expected $(LLM_P32_TRACE_PROFILE)" >&2; exit 2; elif test "$(LLM_P32_REQUIRE_ALL_LINEAR_TRACE)" = "y" && ! grep -Eq '"linear_module_scope"[[:space:]]*:[[:space:]]*"all-decoder-linear"' "$(LLM_P32_TRACE_DIR)/metadata.json"; then echo "LLM default linear trace is not an all-decoder-linear export: $(LLM_P32_TRACE_DIR)" >&2; exit 2; else echo "LLM trace: reusing $(LLM_P32_TRACE_DIR)"; fi; elif test "$(LLM_P32_AUTO_EXPORT_TRACE)" != "y"; then echo "LLM trace metadata is missing: $(LLM_P32_TRACE_DIR)/metadata.json" >&2; echo "Enable CONFIG_LLM_P32_AUTO_EXPORT_TRACE or export the trace manually." >&2; exit 2; elif test -z "$(LLM_P32_TRACE_PROFILE)"; then echo "Select one LLM P32 trace profile in Kconfig." >&2; exit 2; elif test ! -d "$(LLM_P32_MODEL_DIR)"; then echo "Local LLM model directory is missing: $(LLM_P32_MODEL_DIR)" >&2; echo "Select a valid profile, or enable custom model and trace paths in Kconfig." >&2; exit 2; elif test ! -x "$(LLM_P32_PYTHON)"; then echo "LLM Python interpreter is missing or not executable: $(LLM_P32_PYTHON)" >&2; echo "Override LLM_P32_PYTHON with an environment containing torch and transformers." >&2; exit 2; elif test -d "$(LLM_P32_TRACE_DIR)" && test -n "$$(find "$(LLM_P32_TRACE_DIR)" -mindepth 1 -maxdepth 1 -print -quit)"; then echo "Refusing to overwrite non-empty trace directory without metadata.json: $(LLM_P32_TRACE_DIR)" >&2; exit 2; else echo "LLM trace: exporting $(LLM_P32_TRACE_PROFILE) from local model (offline, $(LLM_P32_EXPORT_TOKEN_COUNT) tokens)"; HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 "$(LLM_P32_PYTHON)" "$(LLM_P32_TRACE_EXPORTER)" --profile "$(LLM_P32_TRACE_PROFILE)" --model "$(LLM_P32_MODEL_DIR)" --output "$(LLM_P32_TRACE_DIR)" --tokens "$(LLM_P32_EXPORT_TOKEN_COUNT)" --layer 0 $(LLM_P32_EXPORT_OPTIONS); fi
 	@test -f "$(LLM_P32_TRACE_DIR)/metadata.json" || { echo "LLM trace exporter did not produce metadata.json: $(LLM_P32_TRACE_DIR)" >&2; exit 2; }
+	@if test "$(LLM_P32_REQUIRE_ALL_LINEAR_TRACE)" = "y" && ! grep -Eq '"linear_module_scope"[[:space:]]*:[[:space:]]*"all-decoder-linear"' "$(LLM_P32_TRACE_DIR)/metadata.json"; then echo "LLM default linear trace is not an all-decoder-linear export: $(LLM_P32_TRACE_DIR)" >&2; exit 2; fi
 
 llm_p32_mac_trace_config: llm_p32_trace_config
+endif
+llm_p32_add_trace_config: llm_p32_trace_config
+
+ifeq ($(CONFIG_LLM_P32_ADD_WORKLOAD),y)
+run: llm_p32_add_trace_config
+llm_p32_add_trace_config:
+	@if test "$(CONFIG_LLM_P32_PATH_MODE_CUSTOM)" != "y" && ! grep -q '"profile"' "$(LLM_P32_TRACE_DIR)/metadata.json"; then echo "LLM default trace lacks required profile: $(LLM_P32_TRACE_DIR)" >&2; exit 2; fi
+	@grep -q '"add_operations"' "$(LLM_P32_TRACE_DIR)/metadata.json" || { echo "LLM Add trace lacks add_operations: $(LLM_P32_TRACE_DIR)" >&2; exit 2; }
 endif
 # The LLM workload is intentionally invoked with its Kconfig trace path. It
 # cannot silently use a synthetic fixture.
 
-PVU_SOFTPOSIT_REFERENCE_TESTS := $(CONFIG_PVU_PROTOCOL_REGRESSION) $(CONFIG_PVU_MAC_REGRESSION) $(CONFIG_LLM_P32_MAC_WORKLOAD) $(CONFIG_LLM_P32_CONVERSION_WORKLOAD) $(CONFIG_LLM_P32_DOT_WORKLOAD) $(CONFIG_LLM_P32_MUL_WORKLOAD) $(CONFIG_LLM_P32_TO_INT_WORKLOAD) $(CONFIG_MATRIX_GEMM_P32_BENCHMARK) $(CONFIG_RESNET_POSIT32_TO_FP4) $(CONFIG_RESNET_POSIT32_TO_FP8) $(CONFIG_RESNET_POSIT32_TO_FP16) $(CONFIG_RESNET_POSIT32_TO_FP32)
+PVU_SOFTPOSIT_REFERENCE_TESTS := $(CONFIG_PVU_PROTOCOL_REGRESSION) $(CONFIG_PVU_MAC_REGRESSION) $(CONFIG_LLM_P32_MAC_WORKLOAD) $(CONFIG_LLM_P32_CONVERSION_WORKLOAD) $(CONFIG_LLM_P32_TO_P16_WORKLOAD) $(CONFIG_LLM_P32_DOT_WORKLOAD) $(CONFIG_LLM_P32_MUL_WORKLOAD) $(CONFIG_LLM_P32_TO_INT_WORKLOAD) $(CONFIG_LLM_P32_ADD_WORKLOAD) $(CONFIG_MATRIX_GEMM_P32_BENCHMARK) $(CONFIG_RESNET_POSIT32_TO_FP4) $(CONFIG_RESNET_POSIT32_TO_FP8) $(CONFIG_RESNET_POSIT32_TO_FP16) $(CONFIG_RESNET_POSIT32_TO_FP32)
 ifneq ($(filter y,$(PVU_SOFTPOSIT_REFERENCE_TESTS)),)
 VERILATOR_FLAGS += -CFLAGS "$(SOFTPOSIT_REF_CXXFLAGS)"
 VERILATOR_FLAGS += -LDFLAGS "$(abspath $(SOFTPOSIT_REF_LIB))"
@@ -149,7 +189,10 @@ verilog:
 		"runMain pvu.Elaborate"
 	python3 clean_line.py
 
-$(SOFTPOSIT_REF_LIB): $(SOFTPOSIT_REF_SRCS)
+.PHONY: softposit_ref_force
+softposit_ref_force:
+
+$(SOFTPOSIT_REF_LIB): $(SOFTPOSIT_REF_SRCS) makefile softposit_ref_force
 	@mkdir -p $(SOFTPOSIT_REF_DIR)
 	cd $(SOFTPOSIT_REF_DIR) && g++ $(SOFTPOSIT_REF_CXXFLAGS) -x c++ -c $(SOFTPOSIT_REF_SRCS)
 	ar crs $@ $(SOFTPOSIT_REF_DIR)/*.o

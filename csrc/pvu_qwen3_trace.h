@@ -26,8 +26,15 @@ struct Tensor {
 };
 
 struct LinearModuleTrace {
+  std::string name;
   Tensor input;
   Tensor weight;
+  Tensor output;
+};
+
+struct AddOperationTrace {
+  Tensor lhs;
+  Tensor rhs;
   Tensor output;
 };
 
@@ -40,6 +47,7 @@ struct LlmTrace {
   uint64_t layer_index = 0;
   std::vector<uint64_t> input_token_ids;
   std::map<std::string, LinearModuleTrace> modules;
+  std::map<std::string, AddOperationTrace> add_operations;
 };
 
 struct LlmSelection {
@@ -605,6 +613,7 @@ inline LlmTrace load_llm_trace(const std::string& root) {
     }
 
     LinearModuleTrace module;
+    module.name = name;
     module.input =
         read_tensor(root, prefix + ".input.f32", std::move(input_shape), true);
     module.weight = read_tensor(root, prefix + ".weight.f32",
@@ -612,6 +621,63 @@ inline LlmTrace load_llm_trace(const std::string& root) {
     module.output = read_tensor(root, prefix + ".output.f32",
                                 std::move(output_shape), false);
     trace.modules.emplace(prefix, std::move(module));
+  }
+
+  const auto add_operations = metadata.object.find("add_operations");
+  if (add_operations != metadata.object.end()) {
+    if (version != 2) {
+      throw std::runtime_error(
+          "metadata.json: add_operations require format_version 2");
+    }
+    const auto& operation_values =
+        require_type(add_operations->second, JsonValue::Type::kArray,
+                     "add_operations")
+            .array;
+    if (operation_values.empty()) {
+      throw std::runtime_error(
+          "metadata.json: add_operations must not be empty");
+    }
+
+    std::set<std::string> seen_add_names;
+    std::set<std::string> seen_add_prefixes;
+    for (size_t index = 0; index < operation_values.size(); ++index) {
+      const JsonValue& descriptor = operation_values[index];
+      const std::string context =
+          "add_operations[" + std::to_string(index) + "]";
+      require_type(descriptor, JsonValue::Type::kObject, context);
+      const std::string name = require_string(
+          require_member(descriptor, "name", context), context + ".name");
+      const std::string prefix = require_string(
+          require_member(descriptor, "artifact_prefix", context),
+          context + ".artifact_prefix");
+      if (name.empty() || prefix.empty() ||
+          prefix.find_first_of("/\\\\") != std::string::npos) {
+        throw std::runtime_error("metadata.json: " + context +
+                                 " has an invalid name or artifact_prefix");
+      }
+      if (!seen_add_names.insert(name).second ||
+          !seen_add_prefixes.insert(prefix).second) {
+        throw std::runtime_error("metadata.json: duplicate Add operation " +
+                                 name);
+      }
+      const std::string dtype = require_string(
+          require_member(descriptor, "dtype", context), context + ".dtype");
+      if (dtype != "float32-le") {
+        throw std::runtime_error("metadata.json: " + context +
+                                 ".dtype must be float32-le");
+      }
+      std::vector<size_t> shape = require_matrix_shape(
+          require_member(descriptor, "shape", context), context + ".shape");
+
+      AddOperationTrace operation;
+      operation.lhs =
+          read_tensor(root, prefix + ".lhs.f32", shape, true);
+      operation.rhs =
+          read_tensor(root, prefix + ".rhs.f32", shape, true);
+      operation.output =
+          read_tensor(root, prefix + ".output.f32", std::move(shape), true);
+      trace.add_operations.emplace(prefix, std::move(operation));
+    }
   }
 
   return trace;

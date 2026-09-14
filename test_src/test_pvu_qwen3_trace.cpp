@@ -87,12 +87,17 @@ int main(int argc, char** argv) {
     const pvu::LlmTrace trace = pvu::load_llm_trace(argv[1]);
     require(trace.format_version == 1 && trace.model == "fixture",
             "legacy fixture identity mismatch");
-    require(trace.profile == "legacy-qwen3-v1" && trace.modules.size() == 6,
+    require(trace.profile == "legacy-qwen3-v1" && trace.modules.size() == 7,
             "legacy fixture compatibility mismatch");
     require(trace.modules.at("q_proj").input.shape ==
                 std::vector<size_t>({1, 4}),
             "fixture q_proj input shape mismatch");
 
+    require(trace.modules.at("o_proj").input.shape ==
+                std::vector<size_t>({1, 4}),
+            "fixture o_proj was not loaded");
+    require(trace.modules.at("o_proj").name == "self_attn.o_proj",
+            "fixture o_proj metadata name mismatch");
     const std::filesystem::path cases =
         std::filesystem::path(argv[2]).string() + "-contract-cases";
     std::filesystem::remove_all(cases);
@@ -154,8 +159,55 @@ int main(int argc, char** argv) {
     const pvu::LlmTrace v2_trace = pvu::load_llm_trace(v2.string());
     require(v2_trace.format_version == 2 && v2_trace.profile == "gemma3-1b" &&
                 v2_trace.output_semantics == "linear-no-bias" &&
-                v2_trace.modules.size() == 6,
+                v2_trace.modules.size() == 7,
             "v2 generic trace was not accepted");
+    const auto add_v2 = mutated_trace(v2, cases, "add-v2",
+        [](std::string& metadata) {
+          replace_once(
+              metadata, "  \"modules\": [",
+              "  \"add_operations\": [\n"
+              "    {\n"
+              "      \"name\": \"add.000\",\n"
+              "      \"artifact_prefix\": \"000_add\",\n"
+              "      \"shape\": [1, 4],\n"
+              "      \"dtype\": \"float32-le\"\n"
+              "    }\n"
+              "  ],\n"
+              "  \"modules\": [");
+        });
+    {
+      const auto write_add_tensor =
+          [&add_v2](const char* name, const std::array<uint32_t, 4>& bits) {
+            std::ofstream output(add_v2 / name,
+                                 std::ios::binary | std::ios::trunc);
+            if (!output) throw std::runtime_error("cannot write Add fixture");
+            output.write(reinterpret_cast<const char*>(bits.data()),
+                         static_cast<std::streamsize>(sizeof(bits)));
+          };
+      write_add_tensor("000_add.lhs.f32",
+                       {UINT32_C(0x3f800000), UINT32_C(0x40000000),
+                        UINT32_C(0x40400000), UINT32_C(0x40800000)});
+      write_add_tensor("000_add.rhs.f32",
+                       {UINT32_C(0x41200000), UINT32_C(0x41a00000),
+                        UINT32_C(0x41f00000), UINT32_C(0x42200000)});
+      write_add_tensor("000_add.output.f32",
+                       {UINT32_C(0x41300000), UINT32_C(0x41b00000),
+                        UINT32_C(0x41f80000), UINT32_C(0x42280000)});
+    }
+    const pvu::LlmTrace add_trace = pvu::load_llm_trace(add_v2.string());
+    require(add_trace.add_operations.size() == 1 &&
+                add_trace.add_operations.at("000_add").lhs.values[0] == 1.0F &&
+                add_trace.add_operations.at("000_add").rhs.values[3] == 40.0F &&
+                add_trace.add_operations.at("000_add").output.values[2] == 31.0F,
+            "Add trace artifacts were not loaded");
+
+    const auto missing_add_rhs = mutated_trace(add_v2, cases, "missing-add-rhs",
+        [](std::string&) {});
+    std::filesystem::remove(missing_add_rhs / "000_add.rhs.f32");
+    require_throws(
+        [&] { (void)pvu::load_llm_trace(missing_add_rhs.string()); },
+        "000_add.rhs.f32", "missing Add operand artifact was not rejected");
+
 
     const auto missing_profile = mutated_trace(argv[1], cases, "missing-profile",
         [](std::string& metadata) {
