@@ -193,15 +193,21 @@ printf "LLM Custom paths reuse explicit-subset traces\n"
 # matching default linear trace must keep rejecting a one-module export.
 assert_profile_default_trace_contract() {
   local workload=$1 profile=$2 selector=$3 trace_kind=$4
+  local expected_model
+  case "$profile" in
+    qwen3-0.6b) expected_model=/root/models/Qwen3-0.6B ;;
+    gemma3-1b) expected_model=/root/models/gemma-3-1b-it ;;
+    phi4-mini) expected_model=/root/models/phi-4-mini-instruct ;;
+  esac
   local trace="$scratch_dir/${profile}-${workload#CONFIG_LLM_P32_}-${trace_kind}"
   mkdir -p "$trace"
   local expected_message target
   if [[ "$trace_kind" == linear ]]; then
-    printf '{"format_version":2,"profile":"%s","linear_module_scope":"explicit-subset"}\n' "$profile" >"$trace/metadata.json"
+    printf '{"format_version":2,"profile":"%s","model":"%s","linear_module_scope":"explicit-subset"}\n' "$profile" "$expected_model" >"$trace/metadata.json"
     expected_message="LLM default linear trace is not an all-decoder-linear export: $trace"
     target=llm_p32_trace_config
   else
-    printf '{"format_version":2,"profile":"%s","add_operations":[]}\n' "$profile" >"$trace/metadata.json"
+    printf '{"format_version":2,"profile":"%s","model":"%s","add_operations":[]}\n' "$profile" "$expected_model" >"$trace/metadata.json"
     expected_message="LLM trace: reusing $trace"
     target=llm_p32_add_trace_config
   fi
@@ -265,6 +271,19 @@ for profile_case in \
   assert_profile_default_trace_contract CONFIG_LLM_P32_ADD_WORKLOAD "$profile" "$selector" add
 done
 printf "LLM default trace scope contracts cover every workload and profile\n"
+
+wrong_model_default_add_trace="$scratch_dir/wrong-model-default-add-trace"
+mkdir -p "$wrong_model_default_add_trace"
+printf '{"format_version":2,"profile":"qwen3-0.6b","model":"/root/models/gemma-3-1b-it","add_operations":[]}\n' >"$wrong_model_default_add_trace/metadata.json"
+if output=$(make -C "$repo_root" --no-print-directory llm_p32_add_trace_config "CONFIG_LLM_P32_MAC_WORKLOAD=n" "CONFIG_LLM_P32_CONVERSION_WORKLOAD=n" "CONFIG_LLM_P32_TO_P16_WORKLOAD=n" "CONFIG_LLM_P32_DOT_WORKLOAD=n" "CONFIG_LLM_P32_MUL_WORKLOAD=n" "CONFIG_LLM_P32_TO_INT_WORKLOAD=n" "CONFIG_LLM_P32_ADD_WORKLOAD=y" "CONFIG_LLM_P32_PATH_MODE_PROFILE_DEFAULTS=y" "CONFIG_LLM_P32_PATH_MODE_CUSTOM=n" "CONFIG_LLM_P32_PROFILE_QWEN3_0_6B=y" "CONFIG_LLM_P32_PROFILE_GEMMA3_1B=n" "CONFIG_LLM_P32_PROFILE_PHI4_MINI=n" "CONFIG_LLM_P32_AUTO_EXPORT_TRACE=n" "LLM_P32_DEFAULT_ADD_TRACE_DIR=$wrong_model_default_add_trace" 2>&1); then
+  printf "expected a default Add trace from the wrong model to fail, but command succeeded\n" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$output" | rg -F "LLM default trace model does not match selected profile: expected /root/models/Qwen3-0.6B" >/dev/null; then
+  printf "expected a clear default-model mismatch diagnostic, got:\n%s\n" "$output" >&2
+  exit 1
+fi
+printf "LLM profile-default Add traces require the selected model\n"
 
 profileless_default_add_trace="$scratch_dir/profileless-default-add-trace"
 mkdir -p "$profileless_default_add_trace"
