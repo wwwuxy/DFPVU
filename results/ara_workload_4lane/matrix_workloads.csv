@@ -1,0 +1,16 @@
+name,semantic,M,N,K,mac_terms,cycles,mac_per_cycle_x1000000,mismatches,status
+tail_k1,rvv-fp32-proxy,2,3,1,6,210,28571,0,PASS
+tail_k2,rvv-fp32-proxy,2,3,2,12,181,66298,0,PASS
+tail_k3,rvv-fp32-proxy,2,3,3,18,227,79295,0,PASS
+tail_k4,rvv-fp32-proxy,2,3,4,24,272,88235,0,PASS
+tail_k5,rvv-fp32-proxy,2,3,5,30,316,94936,0,PASS
+square_16,rvv-fp32-proxy,16,16,16,4096,6909,592849,0,PASS
+square_32_k63,rvv-fp32-proxy,32,32,63,64512,59083,1091887,0,PASS
+square_32_k64,rvv-fp32-proxy,32,32,64,65536,60375,1085482,0,PASS
+square_32_k65,rvv-fp32-proxy,32,32,65,66560,60965,1091773,0,PASS
+gemv_row,rvv-fp32-proxy,1,128,256,32768,13640,2402346,0,PASS
+gemv_column,rvv-fp32-proxy,128,1,256,32768,724893,45203,0,PASS
+wide,rvv-fp32-proxy,16,128,64,131072,55079,2379709,0,PASS
+tall,rvv-fp32-proxy,128,16,64,131072,208663,628151,0,PASS
+cube_64,rvv-fp32-proxy,64,64,64,262144,153687,1705700,0,PASS
+cube_128,rvv-fp32-proxy,128,128,128,2097152,874647,2397712,0,PASS
