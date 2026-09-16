@@ -1,0 +1,2 @@
+profile	workload	finished_utc	exit_code	log	note
+qwen3-0.6b	add	2026-09-15T01:34:11Z	0	logs/qwen3-0.6b_add_replay-after-provenance.log	correct-model replay replaces stale-model first run

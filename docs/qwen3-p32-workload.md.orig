@@ -1,0 +1,91 @@
+# LLM P32 MAC workload
+
+该框架将本地开权重 LLM 指定 decoder layer 中实际执行的线性层导出为 trace，再通过既有四 lane `op=11` Posit<32,2> MAC 数据通路回放。当前测试范围固定为三个稠密模型：Qwen3-0.6B、Gemma 3 1B 和 Phi-4-mini-instruct。
+
+模型权重、Python 环境和真实 trace 均由使用者持有；`make` 不联网、不会下载模型，也不会回退到测试 fixture。
+
+## Kconfig profile
+
+| Profile | 模型 | 默认 trace 目录 |
+| --- | --- | --- |
+| `Qwen3-0.6B` | 稠密基线 | `/tmp/qwen3-0.6b-p32-trace` |
+| `Gemma 3 1B` | 小型稠密 | `/tmp/gemma-3-1b-p32-trace` |
+| `Phi-4-mini-instruct` | 中型稠密/GQA | `/tmp/phi-4-mini-p32-trace` |
+
+## 手动下载模型
+
+使用当前 Hugging Face CLI 的 `hf` 子命令，而非已废弃的 `huggingface-cli`：
+
+```bash
+hf auth login  # Gemma 等受访问条款约束的模型需先授权并登录
+
+hf download google/gemma-3-1b-it \
+  --local-dir /root/models/gemma-3-1b-it
+
+hf download microsoft/Phi-4-mini-instruct \
+  --local-dir /root/models/phi-4-mini-instruct
+```
+
+## 导出 trace
+
+导出器写入格式版本 2：每个模块都有 row-major、little-endian `float32` 的 `.input.f32`、`.weight.f32` 和 `.output.f32` 文件。`output` 始终是 `F.linear(input, weight, bias=None)` 的 FP32 参考值；若原始模型层有 bias，metadata 仅记录 `has_bias=true`，当前 MAC 硬件不会执行 bias。
+
+Gemma 3 1B 示例：
+
+```bash
+/root/qwen312-venv/bin/python tools/export_llm_p32_trace.py \
+  --profile gemma3-1b \
+  --model /root/models/gemma-3-1b-it \
+  --output /tmp/gemma-3-1b-p32-trace \
+  --tokens 16 \
+  --layer 0
+```
+
+Phi-4-mini 示例：
+
+```bash
+/root/qwen312-venv/bin/python tools/export_llm_p32_trace.py \
+  --profile phi4-mini \
+  --model /root/models/phi-4-mini-instruct \
+  --output /tmp/phi-4-mini-p32-trace \
+  --tokens 16
+```
+
+导出器会枚举指定 layer 中具有 rank-2 weight、且在这次前向实际执行的线性模块。默认会覆盖 attention 和 MLP 的线性层；若需缩小范围，可重复给出相对 layer 路径：
+
+```bash
+/root/qwen312-venv/bin/python tools/export_llm_p32_trace.py \
+  --profile phi4-mini \
+  --model /root/models/phi-4-mini-instruct \
+  --output /tmp/phi-4-mini-p32-trace \
+  --tokens 16 \
+  --module self_attn.q_proj \
+  --module mlp.down_proj
+```
+
+旧命令 `tools/export_qwen3_p32_trace.py` 仍保留为 Qwen3-0.6B 的兼容包装器。
+
+## Kconfig 配置与运行
+
+从仓库根目录运行：
+
+```bash
+make menuconfig
+```
+
+在 `RESNET_TEST` -> `Posit<32, 2>` 中选择 `llm_p32_mac_workload`，接着选择对应 `LLM P32 MAC trace profile`，并将 trace 路径设为上一步输出目录。然后直接运行：
+
+```bash
+make config.h
+make run
+```
+
+`LLM_P32_MAC_TOKEN_COUNT=0` 会使用每个模块完整的导出 token 维；正数选择每个模块的同一 token 前缀。`LLM_P32_MAC_ROW_COUNT=0` 表示每个模块均匀抽样至多 64 个输出行；正数会选择指定数量的均匀行样本。
+
+## 结果解释
+
+`Hardware vs SoftPosit` 是硬件一致性门：每一个最终 raw P32 结果都必须等于同一顺序的 SoftPosit `p32_mulAdd` 递推；任一 mismatch 会使进程失败。
+
+`Posit vs ordered FP32` 与 `Posit vs exported pre-bias FP32` 是观察指标。前者比较显式 host FP32 递推，后者比较导出器的无 bias FP32 线性输出。模块与总计均报告样本数、ULP 分布、相对误差及绝对误差。
+
+`Cycle report` 和 `Workload summary` 仅是 Verilator 中标记线性 MAC 元素的周期数据；它们不是端到端模型推理、频率、内存流量、prefill/decode 系统吞吐或 TOPS 声明。

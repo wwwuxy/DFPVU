@@ -22,3 +22,10 @@
 - DFPVU executes Posit32 workloads; Ara executes IEEE FP32 or explicitly labeled IEEE conversion proxies. Ratios characterize implementation throughput under corresponding arithmetic semantics, not bit-identical operation latency.
 - Matrix comparison uses identical MNK shapes and useful MAC counts. DFPVU correctness is checked against SoftPosit; Ara correctness is checked against the FP32 analytical result.
 - No frequency, area, power, energy, TOPS, or token/s claim is permitted before controlled PPA and end-to-end evaluation.
+
+## Clock-Bound OpenROAD PPA Protocol
+
+- The DFPVU PPA baseline uses the OpenROAD-flow-scripts `nangate45` platform, `PvuTop` top module, and a 7.5 ns target period.
+- The SDC must bind `dfpvu_vclk` to the real top-level `clock` port. A virtual clock, a CTS run with zero clock nets, or a report with no launch/capture paths is rejected.
+- The reported implementation cost includes mapped standard-cell area and count, core/die area, placement utilization, clock-tree statistics, global-routing wire/via metrics, detailed-routing DRC status, and vectorless power only when its activity assumptions are stated.
+- Ara PPA may be placed beside this baseline only after its synthesizable RTL, identical `nangate45` library, matching 7.5 ns constraint, and the same implementation stages are available. Otherwise the Ara comparison remains cycle-level only.

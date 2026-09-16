@@ -1,0 +1,628 @@
+{
+  "format_version": 2,
+  "profile": "qwen3-0.6b",
+  "output_semantics": "linear-no-bias",
+  "model": "/root/models/gemma-3-1b-it",
+  "prompt": "The quick brown fox jumps over the lazy dog.",
+  "input_token_ids": [
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770
+  ],
+  "layer_index": 0,
+  "modules": [
+    {
+      "name": "self_attn.q_proj",
+      "artifact_prefix": "000_self_attn_q_proj",
+      "input_shape": [
+        128,
+        1152
+      ],
+      "weight_shape": [
+        1024,
+        1152
+      ],
+      "output_shape": [
+        128,
+        1024
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    }
+  ],
+  "add_operations": [
+    {
+      "name": "add.000",
+      "artifact_prefix": "000_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.001",
+      "artifact_prefix": "001_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.002",
+      "artifact_prefix": "002_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.003",
+      "artifact_prefix": "003_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.004",
+      "artifact_prefix": "004_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.005",
+      "artifact_prefix": "005_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.006",
+      "artifact_prefix": "006_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.007",
+      "artifact_prefix": "007_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.008",
+      "artifact_prefix": "008_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.009",
+      "artifact_prefix": "009_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.010",
+      "artifact_prefix": "010_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.011",
+      "artifact_prefix": "011_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.012",
+      "artifact_prefix": "012_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.013",
+      "artifact_prefix": "013_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.014",
+      "artifact_prefix": "014_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.015",
+      "artifact_prefix": "015_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.016",
+      "artifact_prefix": "016_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.017",
+      "artifact_prefix": "017_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.018",
+      "artifact_prefix": "018_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.019",
+      "artifact_prefix": "019_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.020",
+      "artifact_prefix": "020_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.021",
+      "artifact_prefix": "021_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.022",
+      "artifact_prefix": "022_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.023",
+      "artifact_prefix": "023_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.024",
+      "artifact_prefix": "024_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.025",
+      "artifact_prefix": "025_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.026",
+      "artifact_prefix": "026_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.027",
+      "artifact_prefix": "027_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.028",
+      "artifact_prefix": "028_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.029",
+      "artifact_prefix": "029_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.030",
+      "artifact_prefix": "030_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.031",
+      "artifact_prefix": "031_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.032",
+      "artifact_prefix": "032_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.033",
+      "artifact_prefix": "033_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.034",
+      "artifact_prefix": "034_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.035",
+      "artifact_prefix": "035_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.036",
+      "artifact_prefix": "036_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.037",
+      "artifact_prefix": "037_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.038",
+      "artifact_prefix": "038_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.039",
+      "artifact_prefix": "039_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.040",
+      "artifact_prefix": "040_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.041",
+      "artifact_prefix": "041_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.042",
+      "artifact_prefix": "042_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.043",
+      "artifact_prefix": "043_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.044",
+      "artifact_prefix": "044_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.045",
+      "artifact_prefix": "045_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.046",
+      "artifact_prefix": "046_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.047",
+      "artifact_prefix": "047_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.048",
+      "artifact_prefix": "048_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.049",
+      "artifact_prefix": "049_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.050",
+      "artifact_prefix": "050_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    },
+    {
+      "name": "add.051",
+      "artifact_prefix": "051_add",
+      "shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le"
+    }
+  ]
+}

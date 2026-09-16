@@ -1,0 +1,267 @@
+{
+  "format_version": 2,
+  "profile": "gemma3-1b",
+  "output_semantics": "linear-no-bias",
+  "linear_module_scope": "all-decoder-linear",
+  "model": "/root/models/gemma-3-1b-it",
+  "prompt": "The quick brown fox jumps over the lazy dog.",
+  "input_token_ids": [
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770,
+    4799,
+    236761,
+    818,
+    3823,
+    8864,
+    37423,
+    38167,
+    1024,
+    506,
+    31770
+  ],
+  "layer_index": 0,
+  "modules": [
+    {
+      "name": "mlp.down_proj",
+      "artifact_prefix": "006_mlp_down_proj",
+      "input_shape": [
+        128,
+        6912
+      ],
+      "weight_shape": [
+        1152,
+        6912
+      ],
+      "output_shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "mlp.gate_proj",
+      "artifact_prefix": "004_mlp_gate_proj",
+      "input_shape": [
+        128,
+        1152
+      ],
+      "weight_shape": [
+        6912,
+        1152
+      ],
+      "output_shape": [
+        128,
+        6912
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "mlp.up_proj",
+      "artifact_prefix": "005_mlp_up_proj",
+      "input_shape": [
+        128,
+        1152
+      ],
+      "weight_shape": [
+        6912,
+        1152
+      ],
+      "output_shape": [
+        128,
+        6912
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "self_attn.k_proj",
+      "artifact_prefix": "001_self_attn_k_proj",
+      "input_shape": [
+        128,
+        1152
+      ],
+      "weight_shape": [
+        256,
+        1152
+      ],
+      "output_shape": [
+        128,
+        256
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "self_attn.o_proj",
+      "artifact_prefix": "003_self_attn_o_proj",
+      "input_shape": [
+        128,
+        1024
+      ],
+      "weight_shape": [
+        1152,
+        1024
+      ],
+      "output_shape": [
+        128,
+        1152
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "self_attn.q_proj",
+      "artifact_prefix": "000_self_attn_q_proj",
+      "input_shape": [
+        128,
+        1152
+      ],
+      "weight_shape": [
+        1024,
+        1152
+      ],
+      "output_shape": [
+        128,
+        1024
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "self_attn.v_proj",
+      "artifact_prefix": "002_self_attn_v_proj",
+      "input_shape": [
+        128,
+        1152
+      ],
+      "weight_shape": [
+        256,
+        1152
+      ],
+      "output_shape": [
+        128,
+        256
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    }
+  ]
+}

@@ -2,7 +2,7 @@ set repo_root [file normalize [file join [file dirname [info script]] ..]]
 set ::env(PPA_CLOCK_PERIOD_NS) 7.5
 
 proc current_design {name} {}
-proc create_clock {args} {}
+proc create_clock {args} { set ::create_clock_args $args }
 proc all_inputs {args} { return {clock reset data_a data_b} }
 proc all_outputs {} { return {result} }
 proc get_ports {ports} { return $ports }
@@ -15,6 +15,9 @@ proc set_false_path {args} { set ::false_path_args $args }
 
 source [file join $repo_root openroad nangate45 constraint.sdc]
 
+if {$::create_clock_args ne {-name dfpvu_vclk -period 7.5 clock}} {
+  error "expected dfpvu_vclk to bind the clock port, got $::create_clock_args"
+}
 if {$data_inputs ne {data_a data_b}} {
   error "expected only data inputs, got {$data_inputs}"
 }

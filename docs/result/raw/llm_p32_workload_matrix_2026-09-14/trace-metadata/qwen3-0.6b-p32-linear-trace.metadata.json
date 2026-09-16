@@ -1,0 +1,267 @@
+{
+  "format_version": 2,
+  "profile": "qwen3-0.6b",
+  "output_semantics": "linear-no-bias",
+  "linear_module_scope": "all-decoder-linear",
+  "model": "/root/models/Qwen3-0.6B",
+  "prompt": "The quick brown fox jumps over the lazy dog.",
+  "input_token_ids": [
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678,
+    5562,
+    13,
+    785,
+    3974,
+    13876,
+    38835,
+    34208,
+    916,
+    279,
+    15678
+  ],
+  "layer_index": 0,
+  "modules": [
+    {
+      "name": "mlp.down_proj",
+      "artifact_prefix": "006_mlp_down_proj",
+      "input_shape": [
+        128,
+        3072
+      ],
+      "weight_shape": [
+        1024,
+        3072
+      ],
+      "output_shape": [
+        128,
+        1024
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "mlp.gate_proj",
+      "artifact_prefix": "004_mlp_gate_proj",
+      "input_shape": [
+        128,
+        1024
+      ],
+      "weight_shape": [
+        3072,
+        1024
+      ],
+      "output_shape": [
+        128,
+        3072
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "mlp.up_proj",
+      "artifact_prefix": "005_mlp_up_proj",
+      "input_shape": [
+        128,
+        1024
+      ],
+      "weight_shape": [
+        3072,
+        1024
+      ],
+      "output_shape": [
+        128,
+        3072
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "self_attn.k_proj",
+      "artifact_prefix": "001_self_attn_k_proj",
+      "input_shape": [
+        128,
+        1024
+      ],
+      "weight_shape": [
+        1024,
+        1024
+      ],
+      "output_shape": [
+        128,
+        1024
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "self_attn.o_proj",
+      "artifact_prefix": "003_self_attn_o_proj",
+      "input_shape": [
+        128,
+        2048
+      ],
+      "weight_shape": [
+        1024,
+        2048
+      ],
+      "output_shape": [
+        128,
+        1024
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "self_attn.q_proj",
+      "artifact_prefix": "000_self_attn_q_proj",
+      "input_shape": [
+        128,
+        1024
+      ],
+      "weight_shape": [
+        2048,
+        1024
+      ],
+      "output_shape": [
+        128,
+        2048
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    },
+    {
+      "name": "self_attn.v_proj",
+      "artifact_prefix": "002_self_attn_v_proj",
+      "input_shape": [
+        128,
+        1024
+      ],
+      "weight_shape": [
+        1024,
+        1024
+      ],
+      "output_shape": [
+        128,
+        1024
+      ],
+      "dtype": "float32-le",
+      "has_bias": false
+    }
+  ]
+}
