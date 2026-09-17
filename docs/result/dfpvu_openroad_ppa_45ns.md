@@ -43,11 +43,12 @@ The first detailed-routing repair iteration reduces the DRC count by 59.7% (108,
 | Comparison item | DFPVU result | Ara result / allowed conclusion |
 |---|---|---|
 | RTL scope | `PvuTop` arithmetic-unit implementation | Local Ara uses `NR_LANES=4`, `VLEN=4096` and is a full RVV coprocessor with vector register-file, memory, dispatch, and control logic. |
-| Same-flow physical cost | Nangate45 OpenROAD data above | Not available for the same top-level scope. |
+| Matched synthesis/floorplan conditions | Nangate45, 45 ns, 55% core utilization | Same Nangate45, 45 ns, and 55% floorplan policy; maps to 1,996,778 cells (2.730267 mm²) in a 4.962090 mm² core. |
+| Ara physical stage | DFPVU has CTS, GRT, and limited detailed-route diagnostics | Ara has mapped synthesis/floorplan data and a separately labeled CTS screening result; it has no routed PPA point. |
 | Area, power, or energy ratio | Not defined | Do not report a DFPVU/Ara PPA ratio or area-superiority claim. |
 | RTL-cycle comparison | Existing workload and matrix tables | May be reported only as a four-lane, kernel-level cycle comparison with the existing arithmetic-semantics qualification. |
 
-An Ara PPA row becomes valid only after selecting a matching Ara RTL boundary and implementing both designs with the same Nangate45 library, clock period, core-utilization policy, flow stages, and activity model.
+The Ara mapped/floorplan values are valid raw same-condition implementation evidence, but not a like-for-like PPA comparison: the Ara boundary includes the vector register file, memory interface, dispatch, and control logic absent from `PvuTop`. Ara screening CTS disables timing-driven placement, CTS timing repair, and detailed-placement optimization to obtain a bounded implementation checkpoint; it must not be compared with DFPVU's post-GRT, detailed-route, or vectorless-power values. See `docs/result/ara_openroad_ppa_45ns.md` for the complete provenance.
 
 ## Evidence paths
 

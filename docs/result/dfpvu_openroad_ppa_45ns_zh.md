@@ -17,6 +17,6 @@
 
 可在论文中写成：在绑定真实时钟端口的 45 ns Nangate45 流程下，DFPVU 映射为 468,466 个标准单元（0.5419 mm²）和 8,857 个触发器；55% 目标核心利用率对应 0.9836 mm² 核面积。CTS 为 8,857 个原始时钟 sink 插入 1,568 个时钟缓冲器。全局路由后 WNS/TNS 为 -0.02/-0.12 ns，因而属于 near-closure；受限详细路由仍保留 43,770 个 DRC，因此该结果量化当前实现开销和优化空间，不应称为后端签核完成。
 
-与 Ara 的比较应保持边界：本地 Ara 的 `NR_LANES=4, VLEN=4096` 配置是完整 RVV 协处理器，包含向量寄存器文件、访存、分派和控制；本表的 `PvuTop` 是算术单元实现。没有同范围、同库、同周期、同活动模型的 Ara OpenROAD 结果时，不能报告 DFPVU/Ara 的面积、功耗或能耗比，只能保留现有四 lane RTL 周期对比。
+与 Ara 的比较仍应保持边界。本地 Ara 的 `NR_LANES=4, VLEN=4096` 配置是包含向量寄存器文件、访存、分派和控制的完整 RVV accelerator；`PvuTop` 则是算术单元实现。Ara 已在同一 Nangate45、45 ns、55% floorplan 条件下得到 1,996,778 个标准单元、2.730267 mm² 映射面积和 4.962090 mm² 核面积，可作为 raw implementation evidence 并列。其 CTS 是关闭 timing-driven placement、CTS timing repair 和 detailed-placement optimization 后获得的 screening 结果，尚无路由级 PPA 点。因此不能计算 DFPVU/Ara 的面积、功耗、能耗或频率比例，也不能把 Ara screening CTS 与 DFPVU 的 post-GRT、详细路由或 vectorless 功耗数据混为同一阶段。完整来源见 `docs/result/ara_openroad_ppa_45ns_zh.md`。
 
 原始证据目录：`openroad/clock_bound_45ns_u55_repro/work/`（综合、CTS、GRT）和 `openroad/clock_bound_45ns/work/logs/nangate45/dfpvu/base/5_2_route.log`（完成的详细路由）。
