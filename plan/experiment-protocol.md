@@ -21,11 +21,12 @@
 - Both designs use four arithmetic lanes and report kernel-level RTL cycles.
 - DFPVU executes Posit32 workloads; Ara executes IEEE FP32 or explicitly labeled IEEE conversion proxies. Ratios characterize implementation throughput under corresponding arithmetic semantics, not bit-identical operation latency.
 - Matrix comparison uses identical MNK shapes and useful MAC counts. DFPVU correctness is checked against SoftPosit; Ara correctness is checked against the FP32 analytical result.
-- No frequency, area, power, energy, TOPS, or token/s claim is permitted before controlled PPA and end-to-end evaluation.
+- No normalized area, frequency, power, energy, TOPS, or token/s claim is permitted before operation-level matching and end-to-end evaluation; raw mapped-cost observations must retain their scope and stage labels.
 
 ## Clock-Bound OpenROAD PPA Protocol
 
 - The reported DFPVU PPA baseline uses the OpenROAD-flow-scripts `nangate45` platform, `PvuTop` top module, and a 45.0 ns target period. A real-clock 7.5 ns diagnostic run was infeasible and is not reported as an implementation-cost point.
 - The SDC must bind `dfpvu_vclk` to the real top-level `clock` port. A virtual clock, a CTS run with zero clock nets, or a report with no launch/capture paths is rejected.
 - The reported implementation cost includes mapped standard-cell area and count, core/die area, placement utilization, clock-tree statistics, global-routing wire/via metrics, detailed-routing DRC status, and vectorless power only when its activity assumptions are stated.
-- Ara PPA may be placed beside this baseline only after its synthesizable RTL, identical `nangate45` library, matching 45.0 ns constraint, and the same implementation stages are available. Otherwise the Ara comparison remains cycle-level only.
+- Ara VMFPU4 may be placed beside the DFPVU mapped result because it uses synthesizable RTL, the same `nangate45` library, 45.0 ns constraint, and 55% floorplan policy. Its values are raw arithmetic-boundary observations, not normalized PPA results, because operation/format coverage remains different.
+- Ara VMFPU4 screening CTS disables timing/routability-driven placement, CTS repair, and DPO. Its remaining hold/capacitance violations and lack of route evidence prohibit frequency, closure, power, energy, or physical-stage ratios.
