@@ -18,7 +18,7 @@ S3/S4: experimental-results analysis and comparison-section drafting.
 - Numerical ratios recomputed from the verified DFPVU and Ara results.
 - English and Chinese comparison drafts written under `docs/result`.
 - Spec-compliance and quality reviews passed.
-- A clock-bound OpenROAD PPA baseline is in progress. It is a DFPVU-only result until a matching Ara RTL implementation is found locally.
+- A clock-bound 45 ns OpenROAD PPA baseline is available for DFPVU only. Its global route is near timing closure and its one-repair-iteration detailed route retains 43,770 DRC violations; it is not a signoff result. Ara remains cycle-level only until a matching same-scope implementation is available.
 
 
 

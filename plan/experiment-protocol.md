@@ -25,7 +25,7 @@
 
 ## Clock-Bound OpenROAD PPA Protocol
 
-- The DFPVU PPA baseline uses the OpenROAD-flow-scripts `nangate45` platform, `PvuTop` top module, and a 7.5 ns target period.
+- The reported DFPVU PPA baseline uses the OpenROAD-flow-scripts `nangate45` platform, `PvuTop` top module, and a 45.0 ns target period. A real-clock 7.5 ns diagnostic run was infeasible and is not reported as an implementation-cost point.
 - The SDC must bind `dfpvu_vclk` to the real top-level `clock` port. A virtual clock, a CTS run with zero clock nets, or a report with no launch/capture paths is rejected.
 - The reported implementation cost includes mapped standard-cell area and count, core/die area, placement utilization, clock-tree statistics, global-routing wire/via metrics, detailed-routing DRC status, and vectorless power only when its activity assumptions are stated.
-- Ara PPA may be placed beside this baseline only after its synthesizable RTL, identical `nangate45` library, matching 7.5 ns constraint, and the same implementation stages are available. Otherwise the Ara comparison remains cycle-level only.
+- Ara PPA may be placed beside this baseline only after its synthesizable RTL, identical `nangate45` library, matching 45.0 ns constraint, and the same implementation stages are available. Otherwise the Ara comparison remains cycle-level only.
