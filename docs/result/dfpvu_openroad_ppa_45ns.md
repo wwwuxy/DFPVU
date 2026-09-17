@@ -38,17 +38,11 @@ The first detailed-routing repair iteration reduces the DRC count by 59.7% (108,
 
 **Suggested results text.** *Under a clock-bound Nangate45 implementation, DFPVU maps to 468,466 standard cells (0.5419 mm²) and 8,857 flip-flops. At a 55% target core utilization, the flow uses a 0.9836 mm² core and constructs a clock tree with 1,568 inserted buffers for 8,857 original clock sinks. The 45 ns target is near timing closure after global routing (WNS/TNS = -0.02/-0.12 ns). Detailed routing limited to one repair iteration reduces the DRC count from 108,619 to 43,770; consequently, these results quantify current implementation cost and optimization headroom rather than a signoff-clean layout.*
 
-## Ara comparison boundary
+## Ara VMFPU4 comparison boundary
 
-| Comparison item | DFPVU result | Ara result / allowed conclusion |
-|---|---|---|
-| RTL scope | `PvuTop` arithmetic-unit implementation | Local Ara uses `NR_LANES=4`, `VLEN=4096` and is a full RVV coprocessor with vector register-file, memory, dispatch, and control logic. |
-| Matched synthesis/floorplan conditions | Nangate45, 45 ns, 55% core utilization | Same Nangate45, 45 ns, and 55% floorplan policy; maps to 1,996,778 cells (2.730267 mm²) in a 4.962090 mm² core. |
-| Ara physical stage | DFPVU has CTS, GRT, and limited detailed-route diagnostics | Ara has mapped synthesis/floorplan data and a separately labeled CTS screening result; it has no routed PPA point. |
-| Area, power, or energy ratio | Not defined | Do not report a DFPVU/Ara PPA ratio or area-superiority claim. |
-| RTL-cycle comparison | Existing workload and matrix tables | May be reported only as a four-lane, kernel-level cycle comparison with the existing arithmetic-semantics qualification. |
+The maintained Ara reference isolates four lane-local `vmfpu` instances and excludes the vector register file, load/store path, dispatcher, and interconnect. Under the same Nangate45, 45 ns, and 55% floorplan policy, it maps to 637,539 cells and 0.748853 mm². This is a raw same-stage arithmetic-boundary observation beside DFPVU `PvuTop`, not a normalized PPA comparison.
 
-The Ara mapped/floorplan values are valid raw same-condition implementation evidence, but not a like-for-like PPA comparison: the Ara boundary includes the vector register file, memory interface, dispatch, and control logic absent from `PvuTop`. Ara screening CTS disables timing-driven placement, CTS timing repair, and detailed-placement optimization to obtain a bounded implementation checkpoint; it must not be compared with DFPVU's post-GRT, detailed-route, or vectorless-power values. See `docs/result/ara_openroad_ppa_45ns.md` for the complete provenance.
+No area, power, energy, frequency, or efficiency ratio is defined. DFPVU implements a Posit/IEEE vector datapath, while Ara `vmfpu` is an IEEE-oriented FPU/multiplier with its own queues, control, and half/single/double support. The Ara CTS point also remains a screening checkpoint with timing/routability-driven placement, CTS repair, and DPO disabled. See `ara_vmfpu4_openroad_compute_cost_45ns.md` for the scope, measured values, and physical-stage limitations.
 
 ## Evidence paths
 
