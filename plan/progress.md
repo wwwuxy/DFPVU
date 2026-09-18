@@ -41,3 +41,14 @@ S3/S5: experimental-results comparison, paper-facing OpenROAD analysis, and revi
 - Artifacts: bilingual OpenROAD comparison pages, protocol/traceability/schema updates, task packet, and two review records.
 - Verification: source values and deltas were literally scanned in both pages; all linked source pages exist; obsolete full-Ara result names are absent; staged diff has no whitespace errors. No Markdown-lint configuration is present, so structural review was manual.
 - Remaining risk: operation-set and arithmetic-semantic non-equivalence, incomplete physical closure, vectorless power, and no end-to-end model measurement.
+
+### IPDPS 2027 paper revision guide
+
+- Stage: S5, evidence-bound manuscript revision planning and submission-risk review.
+- Required skills: paper orchestration, writing core, peer review, and verification; bounded-design approval was obtained before drafting.
+- Skills actually used: paper orchestration established the task packet and review gates; writing core controlled Chinese academic phrasing and Markdown structure; peer review separated supported claims from reviewer risks; verification checked source values, local links, venue requirements, and worktree quality.
+- Inputs consumed: maintained DFPVU/Ara workload and OpenROAD summaries, the experiment protocol, traceability map, table schema, and official IPDPS 2027 CFP/reproducibility pages.
+- Inputs not used and why: stale workload attempts, host simulation wall time, vectorless power ratios, and obsolete full-Ara PPA evidence do not support the allowed claims.
+- Artifacts produced: `docs/result/dfpvu_ipdps_paper_revision_guide_zh.md`, its task packet, and two review records.
+- Verification run: checked status and mismatch counts, GEMM throughput, Ara comparison values, mapped cells/area, physical limitations, local links, headings, placeholders, writing style, and whitespace.
+- Remaining risk: the manuscript has not yet been reviewed against this guide; literature novelty and citations remain outside this deliverable; ignored raw logs should be packaged before artifact release.
